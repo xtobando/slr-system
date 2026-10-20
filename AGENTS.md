@@ -116,15 +116,19 @@ project root, use the following PowerShell commands:
 
 ```powershell
 python -m venv 1_workspace/.venv
-& ./1_workspace/.venv/Scripts/python.exe -m pip install -r requirements.txt
-Copy-Item .env.example .env
-& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py init
-& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py status
+& ./1_workspace/.venv/Scripts/Activate.ps1
+python -m pip install -r requirements.txt
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+python 2_skills/engine.py init
+python 2_skills/engine.py status
 opencode --model openai/gpt-6.1-sol
 ```
 
 On Unix use `python3 -m venv 1_workspace/.venv`, then
 `1_workspace/.venv/bin/python -m pip install -r requirements.txt` and `cp .env.example .env`.
+On Windows, repeat `& ./1_workspace/.venv/Scripts/Activate.ps1` in each new
+PowerShell terminal. Use `deactivate` to leave the environment. If script execution
+is blocked, use the explicit interpreter paths documented in README.md.
 Use that interpreter for engine commands. Optional neural ranking:
 `python -m pip install 'fastembed>=0.4,<1'`; its first use downloads model weights.
 Select the requested model only if your wrapper/provider exposes it; do not

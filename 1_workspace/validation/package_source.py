@@ -23,10 +23,11 @@ From PowerShell in slr-system, with Python, Git, and OpenCode installed:
 
 ```powershell
 python -m venv 1_workspace/.venv
-& ./1_workspace/.venv/Scripts/python.exe -m pip install -r requirements.txt
-Copy-Item .env.example .env
-& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py init
-& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py status
+& ./1_workspace/.venv/Scripts/Activate.ps1
+python -m pip install -r requirements.txt
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+python 2_skills/engine.py init
+python 2_skills/engine.py status
 opencode --model openai/gpt-6.1-sol
 ```
 

@@ -191,15 +191,19 @@ project root, use the following PowerShell commands:
 
 ```powershell
 python -m venv 1_workspace/.venv
-& ./1_workspace/.venv/Scripts/python.exe -m pip install -r requirements.txt
-Copy-Item .env.example .env
-& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py init
-& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py status
+& ./1_workspace/.venv/Scripts/Activate.ps1
+python -m pip install -r requirements.txt
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+python 2_skills/engine.py init
+python 2_skills/engine.py status
 opencode --model openai/gpt-6.1-sol
 ```
 
 On Unix use `python3 -m venv 1_workspace/.venv`, then
 `1_workspace/.venv/bin/python -m pip install -r requirements.txt` and `cp .env.example .env`.
+On Windows, repeat `& ./1_workspace/.venv/Scripts/Activate.ps1` in each new
+PowerShell terminal. Use `deactivate` to leave the environment. If script execution
+is blocked, use the explicit interpreter paths documented in README.md.
 Use that interpreter for engine commands. Optional neural ranking:
 `python -m pip install 'fastembed>=0.4,<1'`; its first use downloads model weights.
 Select the requested model only if your wrapper/provider exposes it; do not
@@ -244,16 +248,46 @@ Clone the repository, then run the remaining commands from its root. Virtual env
 git clone https://github.com/xtobando/slr-system.git
 Set-Location slr-system
 python -m venv 1_workspace/.venv
-& ./1_workspace/.venv/Scripts/python.exe -m pip install -r requirements.txt
+.\1_workspace\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
-
-# Make this Python available to this terminal and wrappers launched from it.
-$env:PATH = (Resolve-Path '1_workspace/.venv/Scripts').Path + ';' + $env:PATH
 python 2_skills/engine.py init
 python 2_skills/engine.py status
 ```
 
 If your Windows installation exposes `py` rather than `python`, use `py -3 -m venv 1_workspace/.venv` for the environment-creation step.
+
+**Activate an existing environment on Windows**
+
+In each new PowerShell terminal, change to the repository root and run:
+
+```powershell
+.\1_workspace\.venv\Scripts\Activate.ps1
+python -c "import sys; print(sys.executable)"
+```
+
+The printed interpreter path should end in `1_workspace\.venv\Scripts\python.exe`. Launch OpenCode from this activated terminal so it inherits the environment. To leave the environment, run `deactivate`.
+
+If you use **Command Prompt (`cmd.exe`)**, activate with:
+
+```bat
+1_workspace\.venv\Scripts\activate.bat
+```
+
+If PowerShell blocks the activation script, use the environment's interpreter directly:
+
+```powershell
+& ./1_workspace/.venv/Scripts/python.exe -m pip install -r requirements.txt
+& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py status
+```
+
+To make that interpreter available to a wrapper launched from the same PowerShell terminal without activation, prepend its Scripts directory for that terminal:
+
+```powershell
+$env:PATH = (Resolve-Path '1_workspace/.venv/Scripts').Path + ';' + $env:PATH
+```
+
+These options follow Python's [virtual-environment activation instructions](https://docs.python.org/3/library/venv.html#how-venvs-work).
 
 **macOS or Linux**
 
@@ -268,7 +302,7 @@ python 2_skills/engine.py init
 python 2_skills/engine.py status
 ```
 
-Repeat the `PATH` setting or environment activation in each new terminal. All subsequent examples use `python` from that environment. You can always invoke its full path instead. The original developer's optional `1_workspace/.runtime/` and old `.tests/` are machine-local and are not distributed with the repository; portable validation scripts are included separately.
+Repeat environment activation in each new terminal (or the session-only `PATH` fallback above). All subsequent examples use `python` from that environment. You can always invoke its full path instead. The original developer's optional `1_workspace/.runtime/` and old `.tests/` are machine-local and are not distributed with the repository; portable validation scripts are included separately.
 
 `init` is repeatable: it creates missing directories and database tables, synchronizes the bibliography, and initializes local Git when needed. It does not clear an existing review. A fresh review starts with a DRAFT protocol; complete it before screening or ranking.
 
@@ -2798,10 +2832,11 @@ From PowerShell in slr-system, with Python, Git, and OpenCode installed:
 
 ```powershell
 python -m venv 1_workspace/.venv
-& ./1_workspace/.venv/Scripts/python.exe -m pip install -r requirements.txt
-Copy-Item .env.example .env
-& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py init
-& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py status
+& ./1_workspace/.venv/Scripts/Activate.ps1
+python -m pip install -r requirements.txt
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+python 2_skills/engine.py init
+python 2_skills/engine.py status
 opencode --model openai/gpt-6.1-sol
 ```
 
@@ -2832,10 +2867,11 @@ From PowerShell in slr-system, with Python, Git, and OpenCode installed:
 
 ```powershell
 python -m venv 1_workspace/.venv
-& ./1_workspace/.venv/Scripts/python.exe -m pip install -r requirements.txt
-Copy-Item .env.example .env
-& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py init
-& ./1_workspace/.venv/Scripts/python.exe 2_skills/engine.py status
+& ./1_workspace/.venv/Scripts/Activate.ps1
+python -m pip install -r requirements.txt
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+python 2_skills/engine.py init
+python 2_skills/engine.py status
 opencode --model openai/gpt-6.1-sol
 ```
 
