@@ -23,6 +23,7 @@ From PowerShell in slr-system, with Python, Git, and OpenCode installed:
 
 ```powershell
 python -m venv 1_workspace/.venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 & ./1_workspace/.venv/Scripts/Activate.ps1
 python -m pip install -r requirements.txt
 if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
@@ -31,6 +32,8 @@ python 2_skills/engine.py status
 opencode --model openai/gpt-6.1-sol
 ```
 
+Confirm the execution-policy change if prompted; it applies only to the current
+PowerShell session. Repeat the policy and activation commands in each new terminal.
 Complete the protocol and configure credentials as needed. OpenCode must expose
 the requested model through the authenticated provider.
 

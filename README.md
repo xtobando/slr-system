@@ -28,6 +28,7 @@ Clone the repository, then run the remaining commands from its root. Virtual env
 git clone https://github.com/xtobando/slr-system.git
 Set-Location slr-system
 python -m venv 1_workspace/.venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 .\1_workspace\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
@@ -42,9 +43,12 @@ If your Windows installation exposes `py` rather than `python`, use `py -3 -m ve
 In each new PowerShell terminal, change to the repository root and run:
 
 ```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 .\1_workspace\.venv\Scripts\Activate.ps1
 python -c "import sys; print(sys.executable)"
 ```
+
+Confirm the execution-policy change if prompted. `-Scope Process` applies it only to the current PowerShell session; closing the terminal removes it. It allows locally created scripts such as the activation script to run. See Microsoft's [Set-ExecutionPolicy documentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.security/set-executionpolicy).
 
 The printed interpreter path should end in `1_workspace\.venv\Scripts\python.exe`. Launch OpenCode from this activated terminal so it inherits the environment. To leave the environment, run `deactivate`.
 
@@ -54,7 +58,7 @@ If you use **Command Prompt (`cmd.exe`)**, activate with:
 1_workspace\.venv\Scripts\activate.bat
 ```
 
-If PowerShell blocks the activation script, use the environment's interpreter directly:
+An organization's Group Policy can override this setting. If PowerShell still blocks the activation script, use the environment's interpreter directly:
 
 ```powershell
 & ./1_workspace/.venv/Scripts/python.exe -m pip install -r requirements.txt
