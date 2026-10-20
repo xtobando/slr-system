@@ -1,0 +1,25 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+1_workspace/.runtime/
+1_workspace/.models/
+1_workspace/.engine.lock
+1_workspace/.tests/
+1_workspace/validation/case-*/
+1_workspace/validation/live-*/
+*.part
+*.tmp
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*cookies*
+!1_workspace/
+!1_workspace/*.md
+!1_workspace/slr_state.sqlite
+# PDFs and derived assets remain local; bibliographic metadata is backed up.
+3_papers/raw_pdfs/*
+3_papers/parsed_cache/*

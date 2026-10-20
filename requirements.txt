@@ -1,0 +1,7 @@
+# Python 3.10+ and Git. Ranges permit compatible security fixes.
+requests>=2.32.3,<3
+python-dotenv>=1.0.1,<2
+PyMuPDF>=1.24.10,<2
+numpy>=1.26.4,<3
+# Optional neural ranking; install separately: python -m pip install 'fastembed>=0.4,<1'
+# Omitting FastEmbed keeps the deterministic TF-IDF fallback fully usable offline.
