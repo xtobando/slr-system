@@ -7,11 +7,26 @@ Keep exactly three application directories: `1_workspace`, `2_skills`, `3_papers
 Git's hidden `.git` metadata and the local `.env` are operational exceptions.
 The root `README.md` documents setup and usage for the published repository.
 The root `LICENSE` preserves the repository owner's selected license.
+The root `opencode.json` registers `2_skills/` for native skill discovery.
 Keep virtual environments, model caches, and tests beneath `1_workspace`.
+
+## Automatic PDF skill selection
+
+When a task benefits from readable PDF text with preserved formulas and figures,
+select the `pdf-to-markdown` skill even if the user did not ask for conversion or
+name the skill. OpenCode discovers its description through `opencode.json`; load
+it with the native skill tool. In wrappers without that tool, read
+[pdf-to-markdown/SKILL.md](2_skills/pdf-to-markdown/SKILL.md) when relevant.
+The model runs the conversion and inspects visuals as part of the user's task;
+do not require the user to execute the command. This utility is separate from the five review
+stages and does not require a protocol, database record, `init`, or `status`.
+It writes a new conversion folder without changing the review database or
+bibliography. Keep its output separate from existing evidence caches. Continue
+using `ingest` for database-linked SLR full-text assessment and extraction.
 
 ## Start and resume
 
-Read `1_workspace/protocol.md`, especially its active overrides, then run
+For review work, read `1_workspace/protocol.md`, especially its active overrides, then run
 `python 2_skills/engine.py status`. Use the five numbered playbooks in order.
 Complete the research questions, PICOC, eligibility definitions, and extraction
 variables with the user before making substantive review decisions. The initial
@@ -38,7 +53,7 @@ Do not directly edit SQLite; use the CLI. Keep evidence files and PDFs unmodifie
   wrapper's image/vision tool on that file**. Read equations, diagrams, matrices,
   figure legends, axes, units, and table footnotes. Do not infer them from broken
   text. If vision is unavailable, defer the affected finding and disclose why.
-* PNGs are 200-DPI visual references, not lossless mathematical representations.
+* Review-ingestion PNGs are 200-DPI visual references, not lossless mathematical representations.
   The PDF is authoritative. Rendering is deliberately conservative: every page
   has an asset, including scanned pages and undetected vector figures.
 * Never invent results, quotations, DOI links, quality ratings, or effect sizes.

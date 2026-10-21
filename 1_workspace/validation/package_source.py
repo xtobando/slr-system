@@ -2,12 +2,15 @@
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
-names = [".env.example", ".gitignore", "requirements.txt", "AGENTS.md", "README.md", "LICENSE",
+names = [".env.example", ".gitignore", "requirements.txt", "opencode.json", "AGENTS.md", "README.md", "LICENSE",
          "1_workspace/protocol.md", "1_workspace/extraction_matrix.md", "1_workspace/synthesis_report.md",
          "2_skills/01_protocol_and_search.md", "2_skills/02_semantic_rank_screen.md",
          "2_skills/03_multimodal_extract.md", "2_skills/04_synthesis_and_bibtex.md",
-         "2_skills/05_reasoning_calibration.md", "2_skills/engine.py", "3_papers/references.bib",
+         "2_skills/05_reasoning_calibration.md", "2_skills/pdf-to-markdown/SKILL.md",
+         "2_skills/pdf-to-markdown/agents/openai.yaml",
+         "2_skills/engine.py", "3_papers/references.bib",
          "1_workspace/validation_report.md", "1_workspace/validation/test_engine.py",
+         "1_workspace/validation/test_pdf_conversion.py",
          "1_workspace/validation/live_connectors.py", "1_workspace/validation/package_source.py"]
 blocks = ["# Complete SLR system source\n\nEvery requested text file appears below in full. "
           "The initialized SQLite database is generated from engine.py's exact schema. "

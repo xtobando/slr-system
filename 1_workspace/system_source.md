@@ -70,6 +70,20 @@ numpy>=1.26.4,<3
 # Omitting FastEmbed keeps the deterministic TF-IDF fallback fully usable offline.
 ````
 
+## slr-system/opencode.json
+
+````text
+{
+  "$schema": "https://opencode.ai/config.json",
+  "skills": ["./2_skills"],
+  "permission": {
+    "skill": {
+      "pdf-to-markdown": "allow"
+    }
+  }
+}
+````
+
 ## slr-system/AGENTS.md
 
 ````markdown
@@ -82,11 +96,26 @@ Keep exactly three application directories: `1_workspace`, `2_skills`, `3_papers
 Git's hidden `.git` metadata and the local `.env` are operational exceptions.
 The root `README.md` documents setup and usage for the published repository.
 The root `LICENSE` preserves the repository owner's selected license.
+The root `opencode.json` registers `2_skills/` for native skill discovery.
 Keep virtual environments, model caches, and tests beneath `1_workspace`.
+
+## Automatic PDF skill selection
+
+When a task benefits from readable PDF text with preserved formulas and figures,
+select the `pdf-to-markdown` skill even if the user did not ask for conversion or
+name the skill. OpenCode discovers its description through `opencode.json`; load
+it with the native skill tool. In wrappers without that tool, read
+[pdf-to-markdown/SKILL.md](2_skills/pdf-to-markdown/SKILL.md) when relevant.
+The model runs the conversion and inspects visuals as part of the user's task;
+do not require the user to execute the command. This utility is separate from the five review
+stages and does not require a protocol, database record, `init`, or `status`.
+It writes a new conversion folder without changing the review database or
+bibliography. Keep its output separate from existing evidence caches. Continue
+using `ingest` for database-linked SLR full-text assessment and extraction.
 
 ## Start and resume
 
-Read `1_workspace/protocol.md`, especially its active overrides, then run
+For review work, read `1_workspace/protocol.md`, especially its active overrides, then run
 `python 2_skills/engine.py status`. Use the five numbered playbooks in order.
 Complete the research questions, PICOC, eligibility definitions, and extraction
 variables with the user before making substantive review decisions. The initial
@@ -113,7 +142,7 @@ Do not directly edit SQLite; use the CLI. Keep evidence files and PDFs unmodifie
   wrapper's image/vision tool on that file**. Read equations, diagrams, matrices,
   figure legends, axes, units, and table footnotes. Do not infer them from broken
   text. If vision is unavailable, defer the affected finding and disclose why.
-* PNGs are 200-DPI visual references, not lossless mathematical representations.
+* Review-ingestion PNGs are 200-DPI visual references, not lossless mathematical representations.
   The PDF is authoritative. Rendering is deliberately conservative: every page
   has an asset, including scanned pages and undetected vector figures.
 * Never invent results, quotations, DOI links, quality ratings, or effect sizes.
@@ -376,6 +405,8 @@ opencode --model openai/gpt-6.1-sol
 
 The wrapper and provider must actually expose that model identifier; this project does not install OpenCode, authenticate an account, or establish model availability. Verify those steps in the wrapper's documentation. Other wrappers can use the same files and CLI if they can follow [AGENTS.md](AGENTS.md), read local files, execute commands, and inspect PNGs.
 
+The included [opencode.json](opencode.json) registers `./2_skills` with OpenCode's native skill discovery. Start OpenCode from `slr-system/` so this relative path resolves correctly. The model sees the PDF skill's description and can load it when the task needs PDF text and preserved visuals; you do not need to mention the skill or run its CLI command. Restart an existing OpenCode session after adding the configuration. This uses the [OpenCode 2 skill-source configuration](https://opencode.ai/v2/docs/skills).
+
 Begin a review session with a prompt such as:
 
 > Read AGENTS.md and 1_workspace/protocol.md, then run the status command. Help me complete the protocol before searching. Follow the numbered playbooks, record evidence through engine.py, inspect relevant visual assets, and checkpoint each completed batch.
@@ -391,6 +422,7 @@ The project sets a 272,000-token context ceiling and recommends a fresh context 
 - Prioritize reading with hybrid neural/lexical ranking or an offline lexical backend.
 - Persist title/abstract and full-text decisions with quotations, eligibility codes, and an argument against inclusion.
 - Retrieve available PDFs or accept manually supplied files, extract page-marked text, and render every page as a 200-DPI PNG.
+- Convert a local PDF independently of a review into Markdown with full-page images and figure/formula candidate crops, using the optional PDF-to-Markdown skill.
 - Validate textual evidence against sources, record page-specific extractions, and regenerate a clickable evidence matrix.
 - Generate PRISMA counts and a Mermaid flowchart while preserving your written narrative.
 - Save local Git checkpoints and rerun searches for a living review.
@@ -410,6 +442,7 @@ slr-system/
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
+├── opencode.json
 ├── 1_workspace/
 │   ├── protocol.md
 │   ├── slr_state.sqlite
@@ -419,6 +452,7 @@ slr-system/
 │   ├── system_source.md
 │   └── validation/
 │       ├── test_engine.py
+│       ├── test_pdf_conversion.py
 │       ├── live_connectors.py
 │       └── package_source.py
 ├── 2_skills/
@@ -427,6 +461,10 @@ slr-system/
 │   ├── 03_multimodal_extract.md
 │   ├── 04_synthesis_and_bibtex.md
 │   ├── 05_reasoning_calibration.md
+│   ├── pdf-to-markdown/
+│   │   ├── SKILL.md
+│   │   └── agents/
+│   │       └── openai.yaml
 │   └── engine.py
 └── 3_papers/
     ├── references.bib
@@ -443,6 +481,7 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [.env.example](.env.example) | Copy to local `.env` and configure integrations. |
 | [.gitignore](.gitignore) | Controls which credentials, environments, and corpus assets remain local. |
 | [requirements.txt](requirements.txt) | Install the core Python dependencies. FastEmbed is an optional additional installation. |
+| [opencode.json](opencode.json) | Registers `2_skills/` as a native OpenCode skill source and permits loading the PDF skill. |
 | [protocol.md](1_workspace/protocol.md) | Edit research questions, PICOC, searches, eligibility, extraction variables, synthesis plan, and dated corrections. |
 | `1_workspace/slr_state.sqlite` | Persistent database. Use engine commands for changes; inspect a closed copy for ad hoc analysis. |
 | [extraction_matrix.md](1_workspace/extraction_matrix.md) | Generated evidence table; record evidence through the CLI rather than editing this file. |
@@ -450,6 +489,7 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [validation_report.md](1_workspace/validation_report.md) | Validation scope, test instructions, and deployment-specific limits. |
 | [system_source.md](1_workspace/system_source.md) | Generated source handoff snapshot. Edit actual project files and regenerate when needed. |
 | [validation/test_engine.py](1_workspace/validation/test_engine.py) | Run the reproducible behavioral regression suite in isolated fixture workspaces. |
+| [validation/test_pdf_conversion.py](1_workspace/validation/test_pdf_conversion.py) | Test standalone PDF conversion using synthetic PDFs in isolated directories. |
 | [validation/live_connectors.py](1_workspace/validation/live_connectors.py) | Optional network smoke check against all three databases using isolated fixtures. |
 | [validation/package_source.py](1_workspace/validation/package_source.py) | Regenerates `system_source.md` from the current source files. |
 | [01_protocol_and_search.md](2_skills/01_protocol_and_search.md) | Protocol formulation, query translation, search provenance, and completeness checks. |
@@ -457,6 +497,7 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [03_multimodal_extract.md](2_skills/03_multimodal_extract.md) | Retrieval, full-text reading, visual inspection, and evidence extraction. |
 | [04_synthesis_and_bibtex.md](2_skills/04_synthesis_and_bibtex.md) | Traceable synthesis, reporting, citations, and PRISMA interpretation. |
 | [05_reasoning_calibration.md](2_skills/05_reasoning_calibration.md) | Permanent corrections and reassessment of affected papers. |
+| [pdf-to-markdown/SKILL.md](2_skills/pdf-to-markdown/SKILL.md) | Optional local document-conversion skill, separate from the five review stages. |
 | [engine.py](2_skills/engine.py) | Unified deterministic CLI described below. |
 | [references.bib](3_papers/references.bib) | Generated bibliography; avoid manual edits because synchronization replaces it. |
 | `3_papers/raw_pdfs/` | Store original PDFs as `<bib_key>.pdf`, using keys already assigned by the database. |
@@ -551,7 +592,7 @@ python 2_skills/engine.py ingest --bib-key "$bibKey"
 
 Retrieval tries the existing local PDF, available OA locations, configured Unpaywall, and an optional institutional URL. Failures are reported as `NEEDS_MANUAL_PDF` with a source link and target path. Obtain the PDF through your permitted access, save it at the displayed path, and rerun ingestion. `PARSE_ERROR` means the source needs inspection; failed retrieval is not an exclusion decision.
 
-Each parsed paper contains physical page markers `<!-- PAGE N -->` and `[VISUAL_ASSET: ...]` links. Every page is rendered at 200 DPI, including scanned pages and pages without detected figures. These are full-page visual references; the engine does not create separate figure crops or OCR scanned pages. Read relevant sections sequentially and open the referenced PNGs with the wrapper's image tool. Inspect equations, captions, axes, units, and footnotes. The original PDF remains authoritative.
+Each ingested paper contains physical page markers `<!-- PAGE N -->` and `[VISUAL_ASSET: ...]` links. Every page is rendered at 200 DPI, including scanned pages and pages without detected figures. The review's `ingest` command uses full-page visual references and does not create separate figure crops or OCR scanned pages. Read relevant sections sequentially and open the referenced PNGs with the wrapper's image tool. Inspect equations, captions, axes, units, and footnotes. The original PDF remains authoritative. For a separate Markdown conversion with crops, use the optional utility below.
 
 The extract batch returns paths and prior extracted variables, not entire full texts. It can include ingested title/abstract inclusions awaiting full-text assessment as well as final inclusions. Read at most three full texts per agent turn; large papers may need separate contexts.
 
@@ -597,6 +638,65 @@ Do not edit content between `<!-- PRISMA:START -->` and `<!-- PRISMA:END -->`; i
 
 Workspace citations use clickable `[@BibKey]` links to the matching local PDF, plus the paper's verified DOI, arXiv, or PubMed link. The matrix generates these links. PDF links work locally after retrieval; they will not resolve on GitHub when the corresponding PDFs are excluded from the repository.
 
+### Convert a standalone PDF to Markdown
+
+The optional [PDF-to-Markdown skill](2_skills/pdf-to-markdown/SKILL.md) converts a local PDF without a review protocol or database record. It uses the existing PyMuPDF dependency and leaves the source PDF, SQLite database, bibliography, and review decisions unchanged. You do not need to run `init`, `search`, or `ingest` first.
+
+The model can select this skill itself when your request needs reusable PDF text or visual evidence. In OpenCode, simply ask:
+
+> Read my proposal PDF and summarize its methodology, equations, and diagrams.
+
+Or ask for the artifact directly:
+
+> Make a Markdown version of this PDF, keeping its formulas and pictures.
+
+The agent loads the skill, runs the converter when useful, inspects the images, and continues your task. The skill description guides selection; merely mentioning a PDF or requesting citation metadata does not require conversion. `metadata.opencode/autoinvoke` is enabled, and `agents/openai.yaml` also permits implicit invocation for compatible hosts that register this directory. Native discovery must be configured in each host; the supplied `opencode.json` configures OpenCode.
+
+To verify registration on OpenCode 2 without invoking a model, run `opencode api --standalone skill.list` from the project root and look for `pdf-to-markdown`. Normal use does not require this diagnostic or an explicit skill name.
+
+For direct terminal use, the underlying command remains available:
+
+```powershell
+$pdfPath = Read-Host "Local PDF path, absolute or relative to the project root"
+python 2_skills/engine.py convert-pdf --pdf "$pdfPath"
+```
+
+The default destination is `3_papers/parsed_cache/documents/<slug>-<hash12>-<dpi>dpi/`, derived from the filename, source hash, and rendering resolution. The default resolution is **300 DPI**. To choose a different destination or resolution:
+
+```powershell
+$pdfPath = Read-Host "Local PDF path"
+$outputDir = Read-Host "New output directory under 1_workspace/ or 3_papers/parsed_cache/"
+python 2_skills/engine.py convert-pdf --pdf "$pdfPath" --output-dir "$outputDir" --dpi 300
+```
+
+Input and output paths are resolved relative to the project root, even when the command is launched elsewhere. Absolute input paths are allowed. Output must stay under `1_workspace/` or `3_papers/parsed_cache/`, and the destination must not already exist. Use a new destination to rerun a conversion; existing artifacts are never overwritten. Output in the default parsed cache is ignored by Git. Files placed under `1_workspace/` may be included in later workspace checkpoints, so choose deliberately for private documents.
+
+| Output | Purpose |
+|---|---|
+| `fulltext.md` | Extracted text as basic paragraph Markdown, with relative image embeds and physical page references. |
+| `page_N_visual.png` | Full-page visual reference for every page, retained alongside crops. |
+| Crop PNGs | Heuristically detected embedded images, vector graphics, and formula candidates, plus requested manual regions. |
+| `assets.json` | Source SHA-256 and asset metadata, including page numbers and bounding boxes. |
+
+Keep the folder together so relative image links work. Crop detection may miss or truncate content; inspect relevant crops against the full-page images. Every page remains available even when automatic detection misses an equation or diagram. Scanned PDFs retain page images but may yield little text: the utility does not perform OCR, reconstruct exact layout or tables, or automatically generate LaTeX.
+
+For a missed or incomplete crop, inspect the original page and supply an explicit rectangle in a fresh output directory:
+
+```powershell
+$pdfPath = Read-Host "Local PDF path"
+$outputDir = Read-Host "New conversion output directory"
+$page = Read-Host "One-based physical PDF page number"
+$x0 = Read-Host "Left coordinate in unrotated PDF points"
+$y0 = Read-Host "Top coordinate in unrotated PDF points"
+$x1 = Read-Host "Right coordinate in unrotated PDF points"
+$y1 = Read-Host "Bottom coordinate in unrotated PDF points"
+python 2_skills/engine.py convert-pdf --pdf "$pdfPath" --output-dir "$outputDir" --crop "$page" "$x0" "$y0" "$x1" "$y1"
+```
+
+Repeat `--crop PAGE X0 Y0 X1 Y1` for multiple regions. Coordinates use the unrotated PyMuPDF page coordinate system: 72 points per inch, origin at the top left, x increases rightward, and y increases downward. Manually requested crops supplement the full-page images. DPI must be between 72 and 600; renderings above 80 million pixels per page are rejected, so reduce DPI if necessary.
+
+Formulas are preserved as images. If you also need editable math, the agent can add verified `$...$` or `$$...$$` only after inspecting the visual. Prefer a companion `annotated.md`, keep the original image reference, and preserve the generated `fulltext.md`. Unclear symbols stay unresolved. Conversion alone does not establish paper eligibility or create extracted evidence; use the normal review commands for that work.
+
 ### Complete command reference
 
 All commands use `python 2_skills/engine.py COMMAND`. Global and per-command `-h` / `--help` are available:
@@ -606,7 +706,7 @@ python 2_skills/engine.py --help
 python 2_skills/engine.py record-decision --help
 ```
 
-There are **11 commands**. Every application-specific flag is listed below.
+There are **12 commands**. Every application-specific flag is listed below.
 
 | Command | Required flags | Optional flags and defaults | Result |
 |---|---|---|---|
@@ -616,6 +716,7 @@ There are **11 commands**. Every application-specific flag is listed below.
 | `fetch-batch` | `--phase screen` or `--phase extract` | `--limit N`, default/max 15 for screen or 3 for extract | Prints bounded JSON. Positive limits above the phase cap are rejected; a byte budget may reduce output further. |
 | `record-decision` | `--bib-key KEY`; `--stage TITLE_ABSTRACT` or `FULL_TEXT`; `--devils-advocate TEXT`; `--quote TEXT`; `--decision INCLUDE`, `EXCLUDE`, or `MAYBE`; `--code ICn` or `ECn` | `--notes TEXT`, default empty | Validates source evidence, stores the current decision, and preserves a historical audit event. Codes must be defined in the protocol. |
 | `ingest` | None | `--bib-key KEY` | Retrieves and parses all currently included records, or one specified existing key. |
+| `convert-pdf` | `--pdf PATH` | `--output-dir DIR`; `--dpi 300` (72–600); repeatable `--crop PAGE X0 Y0 X1 Y1` | Converts a local PDF to Markdown and visual assets in a new directory. Output is restricted to `1_workspace/` or `3_papers/parsed_cache/`; no database or bibliography changes. |
 | `record-extraction` | `--bib-key KEY`; `--variable TEXT`; `--quote TEXT`; `--page N`; `--value TEXT` | `--used-vision 0` or `1`, default `0` | Stores evidence for a final inclusion and regenerates the matrix. Page is a positive physical PDF page number. |
 | `prisma` | None | None | Prints PRISMA counts and Mermaid flowchart; updates the generated report block. |
 | `checkpoint` | `--message TEXT` | None | Commits workspace state and bibliography to local Git. |
@@ -691,6 +792,7 @@ With the installed environment active and Git on `PATH`, run the offline regress
 
 ```text
 python 1_workspace/validation/test_engine.py
+python 1_workspace/validation/test_pdf_conversion.py
 ```
 
 The optional live check requires network access. The packaging command refreshes the source handoff snapshot:
@@ -710,6 +812,8 @@ Validation uses ignored `case-*` and `live-*` fixture directories beneath `1_wor
 | Quote does not match | Copy exact source text and check physical page numbering. For image-only evidence, inspect the image and use the correct visual assertion. |
 | `NEEDS_MANUAL_PDF` | Save the legitimate PDF at the reported key-specific path and rerun `ingest --bib-key`. |
 | PDF changed since parsing | Reingest, repeat full-text eligibility, and adjudicate older extractions. |
+| Standalone conversion destination already exists | Choose another new `--output-dir`; do not overwrite the earlier conversion. |
+| Standalone conversion misses a figure or formula crop | Inspect its full-page image and rerun in a new directory with a manually identified `--crop` rectangle. |
 | Full-text/extraction stage rejected | Record current title/abstract inclusion first, then full-text inclusion before extraction. |
 | Git checkpoint fails | Confirm Git is available and inspect the repository and write permissions; do not discard review state to fix Git. |
 | Update reports `no_upstream` | Configure the intended branch upstream if skill fetching is wanted; recorded literature searches can still run. |
@@ -978,6 +1082,11 @@ passes. Use the calibration playbook whenever a user identifies a flaw.
 ````markdown
 # 03 — Retrieve, read, inspect, extract
 
+For standalone conversion of a local PDF to Markdown with figure/formula crops,
+use the optional [PDF-to-Markdown skill](pdf-to-markdown/SKILL.md). Its
+`convert-pdf` command creates separate artifacts without changing review state.
+It does not replace the database-linked `ingest` workflow described here.
+
 Run `python 2_skills/engine.py ingest` after title/abstract inclusion, or use
 `--bib-key` for a particular paper. The engine tries an existing local PDF first,
 then OA metadata, configured Unpaywall, and an optional institutional library URL.
@@ -1104,6 +1213,109 @@ correction remains ambiguous, record the uncertainty and ask one focused questio
 while progressing with unaffected records. Never invent a user preference.
 ````
 
+## slr-system/2_skills/pdf-to-markdown/SKILL.md
+
+````markdown
+---
+name: pdf-to-markdown
+description: Read and convert local PDFs into reusable Markdown while preserving formulas, figures, and diagrams as images. Use when a task needs PDF text and visual evidence, including explaining a proposal's methods or equations, even without an explicit conversion request. Use the normal ingest workflow for registered SLR paper evidence.
+metadata:
+  opencode/autoinvoke: "true"
+---
+
+# PDF to Markdown
+
+Select this skill when reusable PDF text and preserved visuals help fulfill the
+user's task. The user need not name the skill or request a terminal command.
+Do not convert a PDF merely because it is mentioned, or when only citation
+metadata is needed. Continue with the user's reading, explanation, or extraction
+task after conversion; creating Markdown is an intermediate step when appropriate.
+
+Locate the project root two directories above this skill directory. Prefer its
+`1_workspace/.venv/Scripts/python.exe` on Windows or
+`1_workspace/.venv/bin/python` on Unix when present; otherwise use the configured
+Python environment. Run `2_skills/engine.py convert-pdf` yourself from that root.
+This utility needs PyMuPDF from `requirements.txt`; no additional
+package or model is required. It does not initialize or modify SQLite, BibTeX,
+screening, or review history. Do not run `init` or `status` solely for conversion.
+
+## Convert the requested PDF
+
+Use the PDF identified by the user or task context; clarify only if the intended
+document is ambiguous. Relative input and output paths resolve
+from the project root; absolute input paths are also supported. A basic command
+is `python 2_skills/engine.py convert-pdf --pdf PATH` with the actual path quoted.
+
+| Flag | Behavior |
+|---|---|
+| `--pdf PATH` | Required local PDF input. The original file is read, not modified. |
+| `--output-dir DIR` | Optional new directory under `1_workspace/` or `3_papers/parsed_cache/`. The destination must not already exist. |
+| `--dpi N` | Resolution for page and crop PNGs; default 300, allowed range 72–600. |
+| `--crop PAGE X0 Y0 X1 Y1` | Optional manually identified crop; repeat for multiple regions. Page is one-based and physical. Coordinates are unrotated PyMuPDF page points, 72 per inch, with origin at top left, x rightward and y downward. |
+
+Without `--output-dir`, output goes to
+`3_papers/parsed_cache/documents/<slug>-<hash12>-<dpi>dpi/`. Existing destinations
+are rejected rather than overwritten. Reuse an existing conversion when its
+`assets.json` source SHA-256 matches the current PDF, the resolution suits the
+task, and its Markdown and referenced images exist. For another rendering, choose a fresh
+output directory; do not delete prior artifacts automatically. A page rendering
+above 80 million pixels is rejected. Reduce DPI within the allowed range if an
+oversized page requires it.
+
+The result contains:
+
+- `fulltext.md`: extracted text as basic paragraph Markdown with relative image
+  embeds and page references.
+- `page_N_visual.png`: a complete rendered image of every page, retained even
+  when crops exist.
+- Candidate image, vector, and formula crops, plus any requested manual crops.
+- `assets.json`: source SHA-256 and page/bounding-box metadata for the assets.
+
+Keep Markdown and its images together so relative embeds resolve. Output under
+`3_papers/parsed_cache/` stays local under the existing ignore rules. Output under
+`1_workspace/` may be tracked by Git; choose the destination to match the user's
+sharing intent, without publishing documents as part of conversion.
+
+## Check visual preservation
+
+Inspect the generated Markdown and open relevant full-page PNGs with the
+available image tool. Compare candidate crops against the page, especially
+equations, multi-panel figures, labels, captions, and table footnotes. Detection
+is heuristic: an undetected region remains visible in its full-page asset.
+
+If a needed crop is missing or cut off, identify its unrotated coordinates from
+the source page and rerun conversion into a new directory with `--crop`. Do not
+guess coordinates from a rotated screenshot without mapping them back to the
+unrotated page. Retain full-page references alongside crops.
+
+The converter does not reconstruct exact reading order, table structure, or
+layout and does not perform OCR or generate LaTeX. Scanned pages may have little
+extractable text. Formulas are preserved visually; malformed extracted text is
+not a reliable transcription. PNG rendering is not lossless mathematical proof.
+
+If the user wants editable mathematics, inspect the original visual and add only
+verified `$...$` or `$$...$$` transcriptions, preferably in a companion
+`annotated.md`. Keep the original image reference and generated `fulltext.md`.
+If vision is unavailable or symbols remain unclear, preserve the image and
+report the limitation rather than inventing notation.
+
+Return links to the conversion folder's Markdown and manifest, state any pages
+requiring manual review, and describe whether formulas remain images or include
+verified transcription. Do not imply that conversion completed SLR screening or
+evidence extraction.
+````
+
+## slr-system/2_skills/pdf-to-markdown/agents/openai.yaml
+
+````text
+interface:
+  display_name: "PDF to Markdown"
+  short_description: "Read PDFs while preserving equations and figures"
+  default_prompt: "Use $pdf-to-markdown to read this PDF while preserving formulas and diagrams."
+policy:
+  allow_implicit_invocation: true
+````
+
 ## slr-system/2_skills/engine.py
 
 ````python
@@ -1118,6 +1330,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import html
 import http.cookiejar
 import json
 import math
@@ -1224,6 +1437,190 @@ def atomic_write(path, content):
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def markdown_text(text):
+    """Keep extracted PDF text literal, including HTML and Markdown punctuation."""
+    text = re.sub(r"([\\`*_{}\[\]#!|~$])", r"\\\1", html.escape(text, quote=False))
+    text = re.sub(r"^(\s*)([-+]|\d+[.)])(?=\s|$)",
+                  lambda match: match[1] + match[2][:-1] + "\\" + match[2][-1], text)
+    return re.sub(r"^(\s*)(=+|-+)(\s*)$", r"\1\\\2\3", text)
+
+
+def pdf_visual_regions(page, blocks):
+    """Find convenient crops; full-page rendering remains the coverage guarantee."""
+    import pymupdf as fitz
+    regions, warnings = [], []
+    try:
+        regions.extend(("image", fitz.Rect(item["bbox"])) for item in page.get_image_info())
+        for rectangle in page.cluster_drawings(x_tolerance=6, y_tolerance=6):
+            rectangle = fitz.Rect(rectangle)
+            # Include intersecting labels, which are usually separate PDF text objects.
+            for block in blocks:
+                box = fitz.Rect(block["bbox"])
+                if rectangle.intersects(box):
+                    rectangle |= box
+            regions.append(("vector", rectangle))
+    except (RuntimeError, ValueError) as exc:
+        warnings.append(f"Graphic crop detection incomplete ({type(exc).__name__}); inspect the full-page image.")
+    for block in blocks:
+        spans = [span for line in block.get("lines", []) for span in line["spans"]]
+        text = " ".join(span["text"] for span in spans)
+        math_font = any(re.search(r"math|symbol|cmsy|cmmi|cmex|stix", span.get("font", ""), re.I)
+                        for span in spans)
+        if (math_font or any(unicodedata.category(char) == "Sm" for char in text)
+                or any(span.get("flags", 0) & 1 for span in spans)):
+            # Whole blocks preserve fraction bars and adjacent super/subscripts better
+            # than individual text spans. This is detection, not formula transcription.
+            regions.append(("formula", fitz.Rect(block["bbox"])))
+    return regions, warnings
+
+
+def convert_pdf(pdf, output_dir, dpi=300, crops=None):
+    """Export a local PDF without constructing Engine or altering review evidence.
+
+    All asset boxes use unrotated page coordinates in PDF points. The PDF stays
+    authoritative: crops are heuristic and no OCR or LaTeX is inferred here.
+    A new destination is published only after the complete export succeeds.
+    """
+    try:
+        import pymupdf as fitz
+    except ImportError as exc:
+        raise EngineError("Install PyMuPDF from requirements.txt to convert PDFs.") from exc
+    pdf, output_dir = Path(pdf).resolve(), Path(output_dir).resolve()
+    if not pdf.is_file():
+        raise EngineError("Input PDF does not exist or is not a file.")
+    if isinstance(dpi, bool) or not isinstance(dpi, int) or not 72 <= dpi <= 600:
+        raise EngineError("PDF conversion DPI must be an integer from 72 to 600.")
+    if output_dir.exists():
+        raise EngineError("Output directory already exists; choose a new --output-dir to preserve existing work.")
+    digest = file_sha256(pdf)
+    try:
+        document = fitz.open(pdf)
+    except (RuntimeError, ValueError) as exc:
+        raise EngineError("Cannot open input as a valid PDF.") from exc
+    with document:
+        if not document.is_pdf or document.needs_pass or not len(document):
+            raise EngineError("PDF is empty, password-protected, or invalid.")
+        manual = defaultdict(list)
+        for crop in crops or []:
+            if len(crop) != 5 or not all(math.isfinite(value) for value in crop):
+                raise EngineError("Each --crop needs PAGE X0 Y0 X1 Y1 with finite numbers.")
+            number, x0, y0, x1, y1 = crop
+            if number != int(number) or not 1 <= number <= len(document) or x1 <= x0 or y1 <= y0:
+                raise EngineError("Crop requires a valid one-based page and an ordered, nonempty rectangle.")
+            page = document[int(number) - 1]
+            box = fitz.Rect(x0, y0, x1, y1)
+            if not (page.rect * page.derotation_matrix).contains(box):
+                raise EngineError("Crop lies outside the unrotated visible page bounds.")
+            manual[int(number)].append(box)
+        # Check every page before allocating large pixmaps or publishing any files.
+        for page in document:
+            if math.ceil(page.rect.width * dpi / 72) * math.ceil(page.rect.height * dpi / 72) > 80_000_000:
+                raise EngineError("PDF page exceeds the 80-million-pixel render budget; choose a lower --dpi.")
+        manifest = {"schema_version": 1, "source": {"filename": pdf.name, "sha256": digest},
+                    "dpi": dpi, "coordinate_system": "unrotated PDF points; top-left origin", "pages": []}
+        pieces = [f"# {markdown_text(pdf.stem)}\n\n<!-- PDF_SHA256: {digest} -->\n\n"
+                  "Text is extracted from the PDF; reading order and mathematical text may be imperfect. "
+                  "Formulas and graphics are preserved visually. Crops are candidates, not an exhaustive "
+                  "classification; every page also has a full-page image. No OCR or LaTeX transcription "
+                  "has been performed. Check the original PDF for authoritative detail.\n"]
+        output_dir.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".pdf-export-", dir=output_dir.parent) as temporary:
+            staging = Path(temporary)
+            for number, page in enumerate(document, 1):
+                bounds = page.rect * page.derotation_matrix
+                blocks = [block for block in page.get_text("dict", sort=True,
+                          flags=fitz.TEXTFLAGS_DICT & ~fitz.TEXT_PRESERVE_IMAGES)["blocks"]
+                          if block["type"] == 0]
+                has_text = any(span["text"].strip() for block in blocks
+                               for line in block["lines"] for span in line["spans"])
+                regions, warnings = pdf_visual_regions(page, blocks)
+                entry = {"page": number, "width": bounds.width, "height": bounds.height,
+                         "rotation": page.rotation, "text_status": "extracted" if has_text else "no_text",
+                         "assets": [], "warnings": warnings}
+
+                def render(kind, box, filename):
+                    # Text/graphics boxes are unrotated; pixmap clips are rotated.
+                    clip = box * page.rotation_matrix
+                    pixmap = page.get_pixmap(dpi=dpi, clip=clip, alpha=False, colorspace=fitz.csRGB)
+                    atomic_write(staging / filename, pixmap.tobytes("png"))
+                    entry["assets"].append({"kind": kind, "path": filename, "bbox": list(box)})
+                    return f"![{kind.capitalize()} reference, page {number}]({filename})"
+
+                full_page = render("page", bounds, f"page_{number}_visual.png")
+                events = []
+                for block in blocks:
+                    lines = ["".join(span["text"] for span in line["spans"]) for line in block["lines"]]
+                    text = "  \n".join(markdown_text(line) for line in lines).strip()
+                    if text:
+                        events.append((block["bbox"][1], block["bbox"][0], 0, text))
+                counters, seen = Counter(), set()
+                if len(regions) > 150:
+                    warnings.append("Automatic crops limited to 150 on this page; inspect the full-page image.")
+                candidates = regions[:150] + [("manual", box) for box in manual[number]]
+                for kind, rectangle in candidates:
+                    padding = 4 if kind != "manual" else 0
+                    box = (rectangle + (-padding, -padding, padding, padding)) & bounds
+                    if box.is_empty or box.is_infinite:
+                        continue
+                    identity = (kind, *(round(value, 2) for value in box))
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    counters[kind] += 1
+                    link = render(kind, box, f"page_{number}_{kind}_{counters[kind]}.png")
+                    events.append((box.y0, box.x0, 1, link))
+                pieces.append(f"<!-- PAGE {number} -->\n\n## Page {number}\n")
+                pieces.extend(item[3] + "\n" for item in sorted(events))
+                if not has_text:
+                    pieces.append("No extractable text on this page; inspect the image (scanned or blank page).\n")
+                pieces.extend("> " + warning + "\n" for warning in warnings)
+                pieces.append("### Full-page reference\n\n" + full_page + "\n")
+                manifest["pages"].append(entry)
+            if file_sha256(pdf) != digest:
+                raise EngineError("Source PDF changed during conversion; retry with a stable copy.")
+            atomic_write(staging / "fulltext.md", "\n".join(pieces))
+            atomic_write(staging / "assets.json", json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+            if output_dir.exists():
+                raise EngineError("Output directory appeared during conversion; existing work was preserved.")
+            staging.rename(output_dir)
+    return {"markdown": str(output_dir / "fulltext.md"), "manifest": str(output_dir / "assets.json"),
+            "pages": len(manifest["pages"]), "images": sum(len(page["assets"]) for page in manifest["pages"])}
+
+
+def convert_pdf_command(args, root=ROOT):
+    root = Path(root).resolve()
+    pdf = (root / args.pdf).resolve()
+    if not pdf.is_file():
+        raise EngineError("Input PDF does not exist or is not a file.")
+    if args.output_dir:
+        target = (root / args.output_dir).resolve()
+    else:
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", pdf.stem).strip(".-")[:64] or "document"
+        target = root / "3_papers/parsed_cache/documents" / f"{slug}-{file_sha256(pdf)[:12]}-{args.dpi}dpi"
+    target = target.resolve()
+    if not any(target.is_relative_to(root / allowed) and target != root / allowed
+               for allowed in ("1_workspace", "3_papers/parsed_cache")):
+        raise EngineError("Output must be a new folder under 1_workspace or 3_papers/parsed_cache.")
+    try:
+        import pymupdf as fitz
+    except ImportError as exc:
+        raise EngineError("Install PyMuPDF from requirements.txt to convert PDFs.") from exc
+    try:
+        result = convert_pdf(pdf, target, dpi=args.dpi, crops=args.crop)
+    except (RuntimeError, fitz.mupdf.FzErrorBase) as exc:
+        raise EngineError("PDF rendering failed; inspect the source PDF. No completed export was published.") from exc
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return result
 
 
 @contextlib.contextmanager
@@ -2244,6 +2641,12 @@ def parser():
     decision.add_argument("--notes", default="")
     ingest = commands.add_parser("ingest", help="Retrieve PDFs and render text plus 200-DPI pages")
     ingest.add_argument("--bib-key")
+    convert = commands.add_parser("convert-pdf", help="Export a local PDF to Markdown with formula/graphic PNGs; no review-state changes")
+    convert.add_argument("--pdf", required=True, help="Input PDF; relative paths start at the project root")
+    convert.add_argument("--output-dir", help="New folder under 1_workspace or 3_papers/parsed_cache")
+    convert.add_argument("--dpi", type=positive, default=300, help="PNG resolution, 72..600 (default: 300)")
+    convert.add_argument("--crop", nargs=5, type=float, action="append", metavar=("PAGE", "X0", "Y0", "X1", "Y1"),
+                         help="Additional crop in unrotated PDF points; repeat for multiple regions")
     extraction = commands.add_parser("record-extraction", help="Store page-grounded evidence and update matrix")
     extraction.add_argument("--bib-key", required=True)
     extraction.add_argument("--variable", required=True)
@@ -2265,6 +2668,9 @@ def main(argv=None):
         sys.stdout.reconfigure(encoding="utf-8")
     try:
         with workspace_lock(ROOT / "1_workspace"):
+            if args.command == "convert-pdf":
+                convert_pdf_command(args, ROOT)
+                return 0
             engine = Engine()
             try:
                 result = None
@@ -2310,9 +2716,9 @@ if __name__ == "__main__":
 ````markdown
 # Implementation validation
 
-Validated on 2026-10-20 with Python 3.12.10 on Windows.
+Original baseline validated on 2026-10-20 with Python 3.12.10 on Windows.
 
-The delivered review database contains zero papers and zero decisions/extractions.
+The original delivered review database contained zero papers and zero decisions/extractions.
 The reproducible validation scripts are published under `1_workspace/validation/`.
 Fixture records and live smoke-test metadata are isolated in ignored `case-*` and
 `live-*` subdirectories; earlier local-only runs used `1_workspace/.tests/`.
@@ -2339,6 +2745,32 @@ python 1_workspace/validation/test_engine.py
 
 The suite uses temporary fixture repositories inside `validation`, validates their
 resolved paths before cleanup, and never changes the main review database.
+
+## Standalone PDF conversion
+
+Validated on 2026-10-20 with Python 3.15.0 and PyMuPDF 1.28.2 on Windows.
+All 23 existing engine regression tests and 13 new conversion tests passed.
+
+```powershell
+python 1_workspace/validation/test_pdf_conversion.py
+```
+
+Synthetic fixtures cover text, formula candidates, raster images, vector diagrams,
+blank and scanned pages, rotated pages with a shifted CropBox, actual crop content,
+relative Markdown links, source hashes, literal Markdown/HTML text, invalid and
+encrypted PDFs, DPI and pixel limits, refusal to overwrite an existing directory,
+cleanup after a failed render, and conversion without opening the review database.
+The CLI reports rendering failures without leaving a completed export. A visual
+check confirmed the sample equation, labeled diagram, and image crops.
+
+The skill's frontmatter, local links, and CLI documentation were checked. The
+optional skill-creator validator needs PyYAML, which is not a project dependency;
+dependency-free structure checks were used instead.
+
+These checks do not establish OCR or automatic LaTeX accuracy: the converter
+performs neither. Crops are heuristic, every page retains a rendered PNG, and the
+original PDF remains authoritative. No personal proposal or review data was used
+as a fixture.
 
 ## Live checks
 
@@ -2780,6 +3212,287 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 ````
 
+## slr-system/1_workspace/validation/test_pdf_conversion.py
+
+````python
+"""Offline PDF conversion checks using synthetic documents, never review data."""
+import contextlib
+import hashlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import re
+import tempfile
+import unittest
+from unittest.mock import patch
+from urllib.parse import unquote
+
+import pymupdf as fitz
+
+
+PROJECT = Path(__file__).resolve().parents[2]
+TEST_ROOT = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("pdf_conversion_engine", PROJECT / "2_skills/engine.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+class PDFConversionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="case-pdf-", dir=TEST_ROOT)
+        self.root = Path(self.temporary.name).resolve()
+        self.addCleanup(self.temporary.cleanup)
+
+    def document(self, name="Evidence notes \u03b1.pdf", rotation=0, blank=True):
+        """Exercise native text, inline math, vector diagrams, and raster images."""
+        path = self.root / name
+        with fitz.open() as document:
+            page = document.new_page(width=360, height=480)
+            page.insert_text((30, 35), "Participants completed the review task.")
+            page.insert_text((30, 75), "x = y + 1", fontsize=14)
+            page.draw_rect(fitz.Rect(30, 120, 145, 200), color=(0, 0, 0))
+            page.draw_rect(fitz.Rect(185, 120, 300, 200), color=(0, 0, 0))
+            page.draw_line(fitz.Point(145, 160), fitz.Point(185, 160), color=(0, 0, 0))
+            page.insert_text((45, 160), "Input")
+            page.insert_text((200, 160), "Output")
+            image = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 32, 24), False)
+            image.clear_with(96)
+            page.insert_image(fitz.Rect(30, 240, 190, 360), pixmap=image)
+            page.set_rotation(rotation)
+            if blank:
+                document.new_page(width=360, height=480)
+            document.save(path)
+        return path
+
+    def read_result(self, result, folder):
+        markdown = Path(result["markdown"])
+        manifest = Path(result["manifest"])
+        self.assertEqual(markdown.resolve(), (folder / "fulltext.md").resolve())
+        self.assertEqual(manifest.resolve(), (folder / "assets.json").resolve())
+        return markdown.read_text(encoding="utf-8"), json.loads(manifest.read_text(encoding="utf-8"))
+
+    def test_text_math_diagrams_and_images_have_portable_visual_references(self):
+        source = self.document()
+        folder = self.root / "converted notes"
+        result = module.convert_pdf(source, folder)
+        markdown, manifest = self.read_result(result, folder)
+        self.assertEqual(result["pages"], 2)
+        self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual(manifest["source"]["filename"], source.name)
+        self.assertEqual(manifest["source"]["sha256"], hashlib.sha256(source.read_bytes()).hexdigest())
+        self.assertEqual(manifest["dpi"], 300)
+        self.assertIn("Participants completed the review task.", markdown)
+        self.assertIn("<!-- PAGE 1 -->", markdown)
+        self.assertIn("<!-- PAGE 2 -->", markdown)
+        first, second = manifest["pages"]
+        self.assertEqual(first["text_status"], "extracted")
+        self.assertEqual(second["text_status"], "no_text")
+        self.assertTrue({"page", "formula", "vector", "image"}.issubset(
+            {asset["kind"] for asset in first["assets"]}))
+        assets = [asset for page in manifest["pages"] for asset in page["assets"]]
+        self.assertEqual(result["images"], len(assets))
+        links = re.findall(r"!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+\"[^\"]*\")?\)", markdown)
+        targets = {unquote(left or right) for left, right in links}
+        self.assertTrue(targets, "A Markdown viewer must display the retained pictures")
+        for asset in assets:
+            relative = Path(asset["path"])
+            self.assertFalse(relative.is_absolute())
+            self.assertTrue((folder / relative).resolve().is_relative_to(folder.resolve()))
+            self.assertTrue((folder / relative).is_file())
+            self.assertIn(relative.as_posix(), targets)
+            pixmap = fitz.Pixmap(str(folder / relative))
+            self.assertEqual((pixmap.xres, pixmap.yres), (300, 300))
+        self.assertTrue((folder / "page_2_visual.png").is_file())
+
+    def test_rotated_page_and_manual_crop_preserve_visual_dimensions(self):
+        source = self.document(rotation=90, blank=False)
+        folder = self.root / "rotated"
+        result = module.convert_pdf(source, folder, dpi=144, crops=[(1, 25, 50, 160, 85)])
+        _, manifest = self.read_result(result, folder)
+        page = manifest["pages"][0]
+        self.assertEqual(page["rotation"], 90)
+        full_page = next(asset for asset in page["assets"] if asset["kind"] == "page")
+        pixmap = fitz.Pixmap(str(folder / full_page["path"]))
+        self.assertEqual((pixmap.width, pixmap.height), (960, 720))
+        manual = [asset for asset in page["assets"] if asset["kind"] == "manual"]
+        self.assertEqual(len(manual), 1)
+        pixmap = fitz.Pixmap(str(folder / manual[0]["path"]))
+        self.assertEqual((pixmap.width, pixmap.height), (70, 270))
+
+    def test_rotated_cropbox_selects_the_requested_content(self):
+        source = self.root / "cropped-and-rotated.pdf"
+        with fitz.open() as document:
+            page = document.new_page(width=360, height=480)
+            page.draw_rect(fitz.Rect(60, 70, 130, 130), color=(1, 0, 0), fill=(1, 0, 0))
+            page.draw_rect(fitz.Rect(190, 230, 290, 330), color=(0, 0, 1), fill=(0, 0, 1))
+            page.set_cropbox(fitz.Rect(30, 40, 330, 400))
+            page.set_rotation(90)
+            document.save(source)
+        folder = self.root / "selected-region"
+        result = module.convert_pdf(source, folder, dpi=144, crops=[(1, 35, 35, 95, 85)])
+        _, manifest = self.read_result(result, folder)
+        manual = next(asset for asset in manifest["pages"][0]["assets"] if asset["kind"] == "manual")
+        pixmap = fitz.Pixmap(str(folder / manual["path"]))
+        self.assertEqual((pixmap.width, pixmap.height), (100, 120))
+        self.assertEqual(pixmap.pixel(pixmap.width // 2, pixmap.height // 2), (255, 0, 0))
+
+    def test_scanned_page_preserves_image_without_fabricating_text(self):
+        source = self.root / "scan.pdf"
+        with fitz.open() as document:
+            page = document.new_page(width=120, height=160)
+            scanned = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, 160), False)
+            scanned.clear_with(96)
+            page.insert_image(page.rect, pixmap=scanned)
+            document.save(source)
+        folder = self.root / "scan-export"
+        result = module.convert_pdf(source, folder, dpi=72)
+        markdown, manifest = self.read_result(result, folder)
+        self.assertEqual(manifest["pages"][0]["text_status"], "no_text")
+        self.assertTrue({"page", "image"}.issubset(
+            {asset["kind"] for asset in manifest["pages"][0]["assets"]}))
+        self.assertIn("No extractable text", markdown)
+        pixmap = fitz.Pixmap(str(folder / "page_1_visual.png"))
+        self.assertEqual(pixmap.pixel(60, 80), (96, 96, 96))
+
+    def test_pdf_markdown_html_and_math_delimiters_remain_literal_text(self):
+        source = self.root / "literal-text.pdf"
+        lines = ["# Source heading", "[reference](https://untrusted.example)",
+                 "<script>alert(1)</script>", "$cost$", "---", "- source bullet"]
+        with fitz.open() as document:
+            page = document.new_page(width=360, height=300)
+            for row, line in enumerate(lines):
+                page.insert_text((20, 30 + 30 * row), line, fontsize=10)
+            document.save(source)
+        result = module.convert_pdf(source, self.root / "literal-export", dpi=72)
+        markdown = Path(result["markdown"]).read_text(encoding="utf-8")
+        self.assertIn(r"\# Source heading", markdown)
+        self.assertIn(r"\[reference\]", markdown)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", markdown)
+        self.assertIn(r"\$cost\$", markdown)
+        self.assertRegex(markdown, r"(?m)^\\-(?:\\?-){2}$")
+        self.assertIn(r"\- source bullet", markdown)
+
+    def test_mid_render_failure_removes_staged_files(self):
+        source = self.document()
+        folder = self.root / "interrupted-output"
+        original_write = module.atomic_write
+        written_pngs = 0
+
+        def fail_after_first_image(path, content):
+            nonlocal written_pngs
+            if Path(path).suffix == ".png":
+                written_pngs += 1
+                if written_pngs == 2:
+                    raise OSError("Simulated write failure")
+            return original_write(path, content)
+
+        before = set(self.root.iterdir())
+        with patch.object(module, "atomic_write", side_effect=fail_after_first_image):
+            with self.assertRaises(OSError):
+                module.convert_pdf(source, folder)
+        self.assertEqual(written_pngs, 2)
+        self.assertFalse(folder.exists())
+        self.assertEqual(set(self.root.iterdir()), before)
+
+    def test_existing_output_is_not_overwritten(self):
+        source = self.document(blank=False)
+        folder = self.root / "existing"
+        folder.mkdir()
+        note = folder / "reviewer-notes.md"
+        note.write_text("Keep the reviewer's work.", encoding="utf-8")
+        with self.assertRaises(module.EngineError):
+            module.convert_pdf(source, folder)
+        self.assertEqual(note.read_text(encoding="utf-8"), "Keep the reviewer's work.")
+        self.assertEqual(list(folder.iterdir()), [note])
+
+    def test_invalid_or_encrypted_pdf_leaves_no_conversion_output(self):
+        invalid = self.root / "invalid.pdf"
+        invalid.write_bytes(b"This is not a PDF.")
+        encrypted = self.root / "encrypted.pdf"
+        with fitz.open() as document:
+            document.new_page(width=100, height=100)
+            document.save(encrypted, encryption=fitz.PDF_ENCRYPT_AES_256,
+                          owner_pw="fixture-owner", user_pw="fixture-user")
+        for source in (invalid, encrypted):
+            with self.subTest(source=source.name):
+                folder = self.root / (source.stem + "-output")
+                before = set(self.root.iterdir())
+                with self.assertRaises(module.EngineError):
+                    module.convert_pdf(source, folder)
+                self.assertFalse(folder.exists())
+                self.assertEqual(set(self.root.iterdir()), before)
+
+    def test_invalid_dpi_and_out_of_page_crops_are_rejected(self):
+        source = self.document(blank=False)
+        for dpi in (71, 601):
+            with self.subTest(dpi=dpi):
+                folder = self.root / f"dpi-{dpi}"
+                with self.assertRaises(module.EngineError):
+                    module.convert_pdf(source, folder, dpi=dpi)
+                self.assertFalse(folder.exists())
+        for crop in ((2, 1, 1, 5, 5), (1, 30, 40, 20, 60), (1, -1, 0, 20, 20)):
+            with self.subTest(crop=crop):
+                folder = self.root / "bad-crop"
+                with self.assertRaises(module.EngineError):
+                    module.convert_pdf(source, folder, crops=[crop])
+                self.assertFalse(folder.exists())
+
+    def test_oversized_page_fails_without_partial_outputs(self):
+        source = self.root / "oversized.pdf"
+        with fitz.open() as document:
+            document.new_page(width=3000, height=3000)
+            document.save(source)
+        folder = self.root / "oversized-output"
+        before = set(self.root.iterdir())
+        with self.assertRaises(module.EngineError):
+            module.convert_pdf(source, folder)
+        self.assertFalse(folder.exists())
+        self.assertEqual(set(self.root.iterdir()), before)
+
+    def test_cli_converts_without_creating_review_database_or_bibliography(self):
+        source = self.document(blank=False)
+        with patch.object(module, "ROOT", self.root), \
+                patch.object(module, "Engine", side_effect=AssertionError("Conversion must not open review state")), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout:
+            code = module.main(["convert-pdf", "--pdf", str(source)])
+        self.assertEqual(code, 0)
+        result = json.loads(stdout.getvalue())
+        folder = Path(result["markdown"]).parent
+        self.assertTrue(folder.is_relative_to(self.root / "3_papers/parsed_cache/documents"))
+        self.assertTrue((folder / "fulltext.md").is_file())
+        self.assertFalse((self.root / "1_workspace/slr_state.sqlite").exists())
+        self.assertFalse((self.root / "3_papers/references.bib").exists())
+
+    def test_cli_rejects_output_outside_project_application_directories(self):
+        source = self.document(blank=False)
+        for output in ("fourth-folder", "2_skills/export", "../outside-conversion"):
+            with self.subTest(output=output), patch.object(module, "ROOT", self.root), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                code = module.main(["convert-pdf", "--pdf", str(source), "--output-dir", output])
+                self.assertNotEqual(code, 0)
+                self.assertFalse((self.root / output).exists())
+
+    def test_cli_reports_rendering_failure_without_traceback_or_partial_export(self):
+        source = self.document(blank=False)
+        output = "3_papers/parsed_cache/failed-export"
+        with patch.object(module, "ROOT", self.root), \
+                patch.object(fitz.Page, "get_pixmap", side_effect=RuntimeError("Simulated PDF rendering failure")), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout, \
+                contextlib.redirect_stderr(io.StringIO()) as stderr:
+            code = module.main(["convert-pdf", "--pdf", str(source), "--output-dir", output])
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("ERROR: PDF rendering failed", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+        self.assertFalse((self.root / output).exists())
+        self.assertEqual(list((self.root / output).parent.glob(".pdf-export-*")), [])
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+````
+
 ## slr-system/1_workspace/validation/live_connectors.py
 
 ````python
@@ -2818,12 +3531,15 @@ raise SystemExit(0 if all(result["ok"] for result in results) else 1)
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
-names = [".env.example", ".gitignore", "requirements.txt", "AGENTS.md", "README.md", "LICENSE",
+names = [".env.example", ".gitignore", "requirements.txt", "opencode.json", "AGENTS.md", "README.md", "LICENSE",
          "1_workspace/protocol.md", "1_workspace/extraction_matrix.md", "1_workspace/synthesis_report.md",
          "2_skills/01_protocol_and_search.md", "2_skills/02_semantic_rank_screen.md",
          "2_skills/03_multimodal_extract.md", "2_skills/04_synthesis_and_bibtex.md",
-         "2_skills/05_reasoning_calibration.md", "2_skills/engine.py", "3_papers/references.bib",
+         "2_skills/05_reasoning_calibration.md", "2_skills/pdf-to-markdown/SKILL.md",
+         "2_skills/pdf-to-markdown/agents/openai.yaml",
+         "2_skills/engine.py", "3_papers/references.bib",
          "1_workspace/validation_report.md", "1_workspace/validation/test_engine.py",
+         "1_workspace/validation/test_pdf_conversion.py",
          "1_workspace/validation/live_connectors.py", "1_workspace/validation/package_source.py"]
 blocks = ["# Complete SLR system source\n\nEvery requested text file appears below in full. "
           "The initialized SQLite database is generated from engine.py's exact schema. "

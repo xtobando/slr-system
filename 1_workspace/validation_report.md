@@ -1,8 +1,8 @@
 # Implementation validation
 
-Validated on 2026-10-20 with Python 3.12.10 on Windows.
+Original baseline validated on 2026-10-20 with Python 3.12.10 on Windows.
 
-The delivered review database contains zero papers and zero decisions/extractions.
+The original delivered review database contained zero papers and zero decisions/extractions.
 The reproducible validation scripts are published under `1_workspace/validation/`.
 Fixture records and live smoke-test metadata are isolated in ignored `case-*` and
 `live-*` subdirectories; earlier local-only runs used `1_workspace/.tests/`.
@@ -29,6 +29,32 @@ python 1_workspace/validation/test_engine.py
 
 The suite uses temporary fixture repositories inside `validation`, validates their
 resolved paths before cleanup, and never changes the main review database.
+
+## Standalone PDF conversion
+
+Validated on 2026-10-20 with Python 3.15.0 and PyMuPDF 1.28.2 on Windows.
+All 23 existing engine regression tests and 13 new conversion tests passed.
+
+```powershell
+python 1_workspace/validation/test_pdf_conversion.py
+```
+
+Synthetic fixtures cover text, formula candidates, raster images, vector diagrams,
+blank and scanned pages, rotated pages with a shifted CropBox, actual crop content,
+relative Markdown links, source hashes, literal Markdown/HTML text, invalid and
+encrypted PDFs, DPI and pixel limits, refusal to overwrite an existing directory,
+cleanup after a failed render, and conversion without opening the review database.
+The CLI reports rendering failures without leaving a completed export. A visual
+check confirmed the sample equation, labeled diagram, and image crops.
+
+The skill's frontmatter, local links, and CLI documentation were checked. The
+optional skill-creator validator needs PyYAML, which is not a project dependency;
+dependency-free structure checks were used instead.
+
+These checks do not establish OCR or automatic LaTeX accuracy: the converter
+performs neither. Crops are heuristic, every page retains a rendered PNG, and the
+original PDF remains authoritative. No personal proposal or review data was used
+as a fixture.
 
 ## Live checks
 

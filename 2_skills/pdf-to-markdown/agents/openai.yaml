@@ -1,0 +1,6 @@
+interface:
+  display_name: "PDF to Markdown"
+  short_description: "Read PDFs while preserving equations and figures"
+  default_prompt: "Use $pdf-to-markdown to read this PDF while preserving formulas and diagrams."
+policy:
+  allow_implicit_invocation: true

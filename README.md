@@ -153,6 +153,8 @@ opencode --model openai/gpt-6.1-sol
 
 The wrapper and provider must actually expose that model identifier; this project does not install OpenCode, authenticate an account, or establish model availability. Verify those steps in the wrapper's documentation. Other wrappers can use the same files and CLI if they can follow [AGENTS.md](AGENTS.md), read local files, execute commands, and inspect PNGs.
 
+The included [opencode.json](opencode.json) registers `./2_skills` with OpenCode's native skill discovery. Start OpenCode from `slr-system/` so this relative path resolves correctly. The model sees the PDF skill's description and can load it when the task needs PDF text and preserved visuals; you do not need to mention the skill or run its CLI command. Restart an existing OpenCode session after adding the configuration. This uses the [OpenCode 2 skill-source configuration](https://opencode.ai/v2/docs/skills).
+
 Begin a review session with a prompt such as:
 
 > Read AGENTS.md and 1_workspace/protocol.md, then run the status command. Help me complete the protocol before searching. Follow the numbered playbooks, record evidence through engine.py, inspect relevant visual assets, and checkpoint each completed batch.
@@ -168,6 +170,7 @@ The project sets a 272,000-token context ceiling and recommends a fresh context 
 - Prioritize reading with hybrid neural/lexical ranking or an offline lexical backend.
 - Persist title/abstract and full-text decisions with quotations, eligibility codes, and an argument against inclusion.
 - Retrieve available PDFs or accept manually supplied files, extract page-marked text, and render every page as a 200-DPI PNG.
+- Convert a local PDF independently of a review into Markdown with full-page images and figure/formula candidate crops, using the optional PDF-to-Markdown skill.
 - Validate textual evidence against sources, record page-specific extractions, and regenerate a clickable evidence matrix.
 - Generate PRISMA counts and a Mermaid flowchart while preserving your written narrative.
 - Save local Git checkpoints and rerun searches for a living review.
@@ -187,6 +190,7 @@ slr-system/
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
+├── opencode.json
 ├── 1_workspace/
 │   ├── protocol.md
 │   ├── slr_state.sqlite
@@ -196,6 +200,7 @@ slr-system/
 │   ├── system_source.md
 │   └── validation/
 │       ├── test_engine.py
+│       ├── test_pdf_conversion.py
 │       ├── live_connectors.py
 │       └── package_source.py
 ├── 2_skills/
@@ -204,6 +209,10 @@ slr-system/
 │   ├── 03_multimodal_extract.md
 │   ├── 04_synthesis_and_bibtex.md
 │   ├── 05_reasoning_calibration.md
+│   ├── pdf-to-markdown/
+│   │   ├── SKILL.md
+│   │   └── agents/
+│   │       └── openai.yaml
 │   └── engine.py
 └── 3_papers/
     ├── references.bib
@@ -220,6 +229,7 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [.env.example](.env.example) | Copy to local `.env` and configure integrations. |
 | [.gitignore](.gitignore) | Controls which credentials, environments, and corpus assets remain local. |
 | [requirements.txt](requirements.txt) | Install the core Python dependencies. FastEmbed is an optional additional installation. |
+| [opencode.json](opencode.json) | Registers `2_skills/` as a native OpenCode skill source and permits loading the PDF skill. |
 | [protocol.md](1_workspace/protocol.md) | Edit research questions, PICOC, searches, eligibility, extraction variables, synthesis plan, and dated corrections. |
 | `1_workspace/slr_state.sqlite` | Persistent database. Use engine commands for changes; inspect a closed copy for ad hoc analysis. |
 | [extraction_matrix.md](1_workspace/extraction_matrix.md) | Generated evidence table; record evidence through the CLI rather than editing this file. |
@@ -227,6 +237,7 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [validation_report.md](1_workspace/validation_report.md) | Validation scope, test instructions, and deployment-specific limits. |
 | [system_source.md](1_workspace/system_source.md) | Generated source handoff snapshot. Edit actual project files and regenerate when needed. |
 | [validation/test_engine.py](1_workspace/validation/test_engine.py) | Run the reproducible behavioral regression suite in isolated fixture workspaces. |
+| [validation/test_pdf_conversion.py](1_workspace/validation/test_pdf_conversion.py) | Test standalone PDF conversion using synthetic PDFs in isolated directories. |
 | [validation/live_connectors.py](1_workspace/validation/live_connectors.py) | Optional network smoke check against all three databases using isolated fixtures. |
 | [validation/package_source.py](1_workspace/validation/package_source.py) | Regenerates `system_source.md` from the current source files. |
 | [01_protocol_and_search.md](2_skills/01_protocol_and_search.md) | Protocol formulation, query translation, search provenance, and completeness checks. |
@@ -234,6 +245,7 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [03_multimodal_extract.md](2_skills/03_multimodal_extract.md) | Retrieval, full-text reading, visual inspection, and evidence extraction. |
 | [04_synthesis_and_bibtex.md](2_skills/04_synthesis_and_bibtex.md) | Traceable synthesis, reporting, citations, and PRISMA interpretation. |
 | [05_reasoning_calibration.md](2_skills/05_reasoning_calibration.md) | Permanent corrections and reassessment of affected papers. |
+| [pdf-to-markdown/SKILL.md](2_skills/pdf-to-markdown/SKILL.md) | Optional local document-conversion skill, separate from the five review stages. |
 | [engine.py](2_skills/engine.py) | Unified deterministic CLI described below. |
 | [references.bib](3_papers/references.bib) | Generated bibliography; avoid manual edits because synchronization replaces it. |
 | `3_papers/raw_pdfs/` | Store original PDFs as `<bib_key>.pdf`, using keys already assigned by the database. |
@@ -328,7 +340,7 @@ python 2_skills/engine.py ingest --bib-key "$bibKey"
 
 Retrieval tries the existing local PDF, available OA locations, configured Unpaywall, and an optional institutional URL. Failures are reported as `NEEDS_MANUAL_PDF` with a source link and target path. Obtain the PDF through your permitted access, save it at the displayed path, and rerun ingestion. `PARSE_ERROR` means the source needs inspection; failed retrieval is not an exclusion decision.
 
-Each parsed paper contains physical page markers `<!-- PAGE N -->` and `[VISUAL_ASSET: ...]` links. Every page is rendered at 200 DPI, including scanned pages and pages without detected figures. These are full-page visual references; the engine does not create separate figure crops or OCR scanned pages. Read relevant sections sequentially and open the referenced PNGs with the wrapper's image tool. Inspect equations, captions, axes, units, and footnotes. The original PDF remains authoritative.
+Each ingested paper contains physical page markers `<!-- PAGE N -->` and `[VISUAL_ASSET: ...]` links. Every page is rendered at 200 DPI, including scanned pages and pages without detected figures. The review's `ingest` command uses full-page visual references and does not create separate figure crops or OCR scanned pages. Read relevant sections sequentially and open the referenced PNGs with the wrapper's image tool. Inspect equations, captions, axes, units, and footnotes. The original PDF remains authoritative. For a separate Markdown conversion with crops, use the optional utility below.
 
 The extract batch returns paths and prior extracted variables, not entire full texts. It can include ingested title/abstract inclusions awaiting full-text assessment as well as final inclusions. Read at most three full texts per agent turn; large papers may need separate contexts.
 
@@ -374,6 +386,65 @@ Do not edit content between `<!-- PRISMA:START -->` and `<!-- PRISMA:END -->`; i
 
 Workspace citations use clickable `[@BibKey]` links to the matching local PDF, plus the paper's verified DOI, arXiv, or PubMed link. The matrix generates these links. PDF links work locally after retrieval; they will not resolve on GitHub when the corresponding PDFs are excluded from the repository.
 
+### Convert a standalone PDF to Markdown
+
+The optional [PDF-to-Markdown skill](2_skills/pdf-to-markdown/SKILL.md) converts a local PDF without a review protocol or database record. It uses the existing PyMuPDF dependency and leaves the source PDF, SQLite database, bibliography, and review decisions unchanged. You do not need to run `init`, `search`, or `ingest` first.
+
+The model can select this skill itself when your request needs reusable PDF text or visual evidence. In OpenCode, simply ask:
+
+> Read my proposal PDF and summarize its methodology, equations, and diagrams.
+
+Or ask for the artifact directly:
+
+> Make a Markdown version of this PDF, keeping its formulas and pictures.
+
+The agent loads the skill, runs the converter when useful, inspects the images, and continues your task. The skill description guides selection; merely mentioning a PDF or requesting citation metadata does not require conversion. `metadata.opencode/autoinvoke` is enabled, and `agents/openai.yaml` also permits implicit invocation for compatible hosts that register this directory. Native discovery must be configured in each host; the supplied `opencode.json` configures OpenCode.
+
+To verify registration on OpenCode 2 without invoking a model, run `opencode api --standalone skill.list` from the project root and look for `pdf-to-markdown`. Normal use does not require this diagnostic or an explicit skill name.
+
+For direct terminal use, the underlying command remains available:
+
+```powershell
+$pdfPath = Read-Host "Local PDF path, absolute or relative to the project root"
+python 2_skills/engine.py convert-pdf --pdf "$pdfPath"
+```
+
+The default destination is `3_papers/parsed_cache/documents/<slug>-<hash12>-<dpi>dpi/`, derived from the filename, source hash, and rendering resolution. The default resolution is **300 DPI**. To choose a different destination or resolution:
+
+```powershell
+$pdfPath = Read-Host "Local PDF path"
+$outputDir = Read-Host "New output directory under 1_workspace/ or 3_papers/parsed_cache/"
+python 2_skills/engine.py convert-pdf --pdf "$pdfPath" --output-dir "$outputDir" --dpi 300
+```
+
+Input and output paths are resolved relative to the project root, even when the command is launched elsewhere. Absolute input paths are allowed. Output must stay under `1_workspace/` or `3_papers/parsed_cache/`, and the destination must not already exist. Use a new destination to rerun a conversion; existing artifacts are never overwritten. Output in the default parsed cache is ignored by Git. Files placed under `1_workspace/` may be included in later workspace checkpoints, so choose deliberately for private documents.
+
+| Output | Purpose |
+|---|---|
+| `fulltext.md` | Extracted text as basic paragraph Markdown, with relative image embeds and physical page references. |
+| `page_N_visual.png` | Full-page visual reference for every page, retained alongside crops. |
+| Crop PNGs | Heuristically detected embedded images, vector graphics, and formula candidates, plus requested manual regions. |
+| `assets.json` | Source SHA-256 and asset metadata, including page numbers and bounding boxes. |
+
+Keep the folder together so relative image links work. Crop detection may miss or truncate content; inspect relevant crops against the full-page images. Every page remains available even when automatic detection misses an equation or diagram. Scanned PDFs retain page images but may yield little text: the utility does not perform OCR, reconstruct exact layout or tables, or automatically generate LaTeX.
+
+For a missed or incomplete crop, inspect the original page and supply an explicit rectangle in a fresh output directory:
+
+```powershell
+$pdfPath = Read-Host "Local PDF path"
+$outputDir = Read-Host "New conversion output directory"
+$page = Read-Host "One-based physical PDF page number"
+$x0 = Read-Host "Left coordinate in unrotated PDF points"
+$y0 = Read-Host "Top coordinate in unrotated PDF points"
+$x1 = Read-Host "Right coordinate in unrotated PDF points"
+$y1 = Read-Host "Bottom coordinate in unrotated PDF points"
+python 2_skills/engine.py convert-pdf --pdf "$pdfPath" --output-dir "$outputDir" --crop "$page" "$x0" "$y0" "$x1" "$y1"
+```
+
+Repeat `--crop PAGE X0 Y0 X1 Y1` for multiple regions. Coordinates use the unrotated PyMuPDF page coordinate system: 72 points per inch, origin at the top left, x increases rightward, and y increases downward. Manually requested crops supplement the full-page images. DPI must be between 72 and 600; renderings above 80 million pixels per page are rejected, so reduce DPI if necessary.
+
+Formulas are preserved as images. If you also need editable math, the agent can add verified `$...$` or `$$...$$` only after inspecting the visual. Prefer a companion `annotated.md`, keep the original image reference, and preserve the generated `fulltext.md`. Unclear symbols stay unresolved. Conversion alone does not establish paper eligibility or create extracted evidence; use the normal review commands for that work.
+
 ### Complete command reference
 
 All commands use `python 2_skills/engine.py COMMAND`. Global and per-command `-h` / `--help` are available:
@@ -383,7 +454,7 @@ python 2_skills/engine.py --help
 python 2_skills/engine.py record-decision --help
 ```
 
-There are **11 commands**. Every application-specific flag is listed below.
+There are **12 commands**. Every application-specific flag is listed below.
 
 | Command | Required flags | Optional flags and defaults | Result |
 |---|---|---|---|
@@ -393,6 +464,7 @@ There are **11 commands**. Every application-specific flag is listed below.
 | `fetch-batch` | `--phase screen` or `--phase extract` | `--limit N`, default/max 15 for screen or 3 for extract | Prints bounded JSON. Positive limits above the phase cap are rejected; a byte budget may reduce output further. |
 | `record-decision` | `--bib-key KEY`; `--stage TITLE_ABSTRACT` or `FULL_TEXT`; `--devils-advocate TEXT`; `--quote TEXT`; `--decision INCLUDE`, `EXCLUDE`, or `MAYBE`; `--code ICn` or `ECn` | `--notes TEXT`, default empty | Validates source evidence, stores the current decision, and preserves a historical audit event. Codes must be defined in the protocol. |
 | `ingest` | None | `--bib-key KEY` | Retrieves and parses all currently included records, or one specified existing key. |
+| `convert-pdf` | `--pdf PATH` | `--output-dir DIR`; `--dpi 300` (72–600); repeatable `--crop PAGE X0 Y0 X1 Y1` | Converts a local PDF to Markdown and visual assets in a new directory. Output is restricted to `1_workspace/` or `3_papers/parsed_cache/`; no database or bibliography changes. |
 | `record-extraction` | `--bib-key KEY`; `--variable TEXT`; `--quote TEXT`; `--page N`; `--value TEXT` | `--used-vision 0` or `1`, default `0` | Stores evidence for a final inclusion and regenerates the matrix. Page is a positive physical PDF page number. |
 | `prisma` | None | None | Prints PRISMA counts and Mermaid flowchart; updates the generated report block. |
 | `checkpoint` | `--message TEXT` | None | Commits workspace state and bibliography to local Git. |
@@ -468,6 +540,7 @@ With the installed environment active and Git on `PATH`, run the offline regress
 
 ```text
 python 1_workspace/validation/test_engine.py
+python 1_workspace/validation/test_pdf_conversion.py
 ```
 
 The optional live check requires network access. The packaging command refreshes the source handoff snapshot:
@@ -487,6 +560,8 @@ Validation uses ignored `case-*` and `live-*` fixture directories beneath `1_wor
 | Quote does not match | Copy exact source text and check physical page numbering. For image-only evidence, inspect the image and use the correct visual assertion. |
 | `NEEDS_MANUAL_PDF` | Save the legitimate PDF at the reported key-specific path and rerun `ingest --bib-key`. |
 | PDF changed since parsing | Reingest, repeat full-text eligibility, and adjudicate older extractions. |
+| Standalone conversion destination already exists | Choose another new `--output-dir`; do not overwrite the earlier conversion. |
+| Standalone conversion misses a figure or formula crop | Inspect its full-page image and rerun in a new directory with a manually identified `--crop` rectangle. |
 | Full-text/extraction stage rejected | Record current title/abstract inclusion first, then full-text inclusion before extraction. |
 | Git checkpoint fails | Confirm Git is available and inspect the repository and write permissions; do not discard review state to fix Git. |
 | Update reports `no_upstream` | Configure the intended branch upstream if skill fetching is wanted; recorded literature searches can still run. |
