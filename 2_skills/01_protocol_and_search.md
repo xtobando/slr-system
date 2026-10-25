@@ -1,21 +1,40 @@
-# 01 — Protocol and three-database search
+# 01 — Protocol and Provider-Configurable Paper Gathering
 
 Read AGENTS.md and the active protocol overrides. Complete the RQs, PICOC, date
 range, publication types, eligibility rules, extraction variables, and synthesis
 plan. Change protocol Status to READY when these definitions are usable. Do not
 choose an arbitrary research topic to fill the template.
 
-Translate concepts separately: OpenAlex uses its `search` syntax; arXiv uses
-fielded expressions such as `all:` or `ti:`; PubMed supports field tags and MeSH.
-There is no universally equivalent Boolean string. Record each translation and
-its limits in the protocol. Use separate `search --dbs` invocations when syntax
-differs. `--max-results` applies per database, not to the combined corpus.
+## User-Driven Provider Selection and Capping in OpenCode
+
+Before executing any database queries, the model must interactively consult and
+confirm with the user through OpenCode:
+
+1. **Target Providers / Databases**:
+   - Determine which providers to query (`openalex`, `arxiv`, `pubmed`, or a combination).
+   - *Default recommendation*: For most domains (e.g., Computer Science, Engineering, Social Sciences), **OpenAlex alone** is often sufficient as it comprehensively indexes Crossref, PubMed, arXiv, and institutional repositories. Highlight to the user that OpenAlex unifies search syntax.
+   - For biomedical reviews requiring specific MeSH vocabulary trees, include `pubmed`.
+   - For fast-moving AI/ML topics requiring preprints before publisher indexing, include `arxiv`.
+2. **Per-Provider Result Limits (`--max-results`)**:
+   - Confirm whether the user wants to truncate or limit papers retrieved per provider (e.g., 50, 100, 200, 500). Default is 200 per database.
+3. **Date Cutoffs (`--since YYYY-MM-DD`)**:
+   - Confirm whether the search should be bounded by publication date.
+
+Record the agreed database selection, caps, and queries in `1_workspace/protocol.md`.
+
+## Execution and Translation
+
+Translate concepts separately for each selected provider:
+- **OpenAlex** uses its `search` syntax or filter expressions.
+- **arXiv** uses fielded expressions such as `all:` or `ti:`.
+- **PubMed** supports field tags such as `[Title/Abstract]` and MeSH terms.
+
+Use separate `search --dbs` invocations when syntax or caps differ per provider:
 
 ```text
 python 2_skills/engine.py init
-python 2_skills/engine.py search --query "retrieval augmented generation" --dbs openalex --max-results 200
-python 2_skills/engine.py search --query "all:\"retrieval augmented generation\"" --dbs arxiv --max-results 200
-python 2_skills/engine.py search --query "retrieval augmented generation[Title/Abstract]" --dbs pubmed --max-results 200
+python 2_skills/engine.py search --query "retrieval augmented generation" --dbs openalex --max-results 150
+python 2_skills/engine.py search --query "all:\"retrieval augmented generation\"" --dbs arxiv --max-results 50
 python 2_skills/engine.py checkpoint --message "Search round recorded"
 ```
 

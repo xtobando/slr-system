@@ -4,6 +4,7 @@
 
 Review not yet conducted. Write objectives, methods, results, and limitations only
 after evidence is available. State registration, funding, and conflicts of interest.
+When exporting to LaTeX, format strictly according to `1_workspace/SLRBlueprint.tex`.
 
 ## Rationale and objectives
 
@@ -15,6 +16,8 @@ Report eligibility, information sources, exact search strategies and dates,
 selection process, reviewer roles, calibration, extraction, risk-of-bias method,
 synthesis methods, missing data, and protocol amendments. Disclose LLM assistance,
 model requested/actually used, vision use, and human adjudication.
+Methodological threats to validity (search coverage, screening bias, extraction accuracy)
+belong under Section 2.5 of the LaTeX blueprint.
 
 ## Study selection
 
@@ -32,12 +35,17 @@ their underlying study before presenting distinct-study counts.
 
 No synthesis is available. Separate quoted findings from reviewer interpretations.
 Use extracted values with denominators, units, uncertainty, and relevant pages.
+Organize by research questions (RQ1, RQ2, ...) and specific comparative dimensions,
+matching Section 3 of `1_workspace/SLRBlueprint.tex`.
 
-## Discussion and limitations
+## Discussion and literature limitations
 
-Discuss evidence strength, disagreement, heterogeneity, retrieval failures,
-publication/language bias, date restrictions, ranking limitations, and review-process
-limitations. Do not infer a negative finding from missing evidence.
+Discuss evidence strength, agreement/disagreement, heterogeneity, conceptual frameworks,
+and intrinsic limitations of the synthesized literature per se (e.g., methodological constraints,
+uncontrolled confounding, sample size limitations, short-term evaluations, lack of generalizability).
+Do NOT discuss search limitations (database coverage, keyword caps, retrieval omissions) here;
+confine review/search mechanics threats strictly to the methodology section. Do not infer a negative
+finding merely from missing evidence.
 
 ## Availability and living-review history
 

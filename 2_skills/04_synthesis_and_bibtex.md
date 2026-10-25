@@ -31,8 +31,43 @@ or PubMed replacing DOI when absent. Do not use bare citation keys or guessed
 identifiers. `references.bib` is synchronized from SQLite on search/init/checkpoint;
 do not hand-edit it. Metadata enrichment preserves previously assigned keys.
 
+## LaTeX SLR Manuscript Generation (`SLRBlueprint.tex`)
+
+When drafting the final review manuscript in LaTeX (`1_workspace/manuscript.tex`), you must strictly adhere to the layout and structural specification in [`1_workspace/SLRBlueprint.tex`](../1_workspace/SLRBlueprint.tex):
+- Keep documentclass `\documentclass[11pt]{article}`, geometry margins (`[margin=1in]{geometry}`), paragraph formatting (`\setlength{\parindent}{0pt}`, `\setlength{\parskip}{1\baselineskip}`), and core packages (`amsmath,amssymb`, `tikz-cd`, `multicol`).
+- Structure the document strictly following the blueprint sections:
+  1. `\title{[Systematic Literature Review Title]: A Systematic Literature Review}`
+  2. `\author{[Author Name]\thanks{[Affiliation and contact information]}}`
+  3. `\maketitle`
+  4. `\begin{abstract}`: One unstructured paragraph that introduces the topic and motivation, states the review objective and method, reports the number of included primary studies, summarizes the synthesis dimensions and main findings, and identifies principal research gaps.
+  5. `\textbf{Keywords:}`
+  6. `\section{Introduction}`
+  7. `\section{Methodology}`
+     - `\subsection{Research Questions}`
+     - `\subsection{Search of Primary Studies}`
+     - `\subsection{Analysis of Primary Studies}` (with `\subsubsection{Inclusion and Exclusion Criteria}` and `\subsubsection{Quality Assessment}`)
+     - `\subsection{Data Extraction}`
+     - `\subsection{Threats to Validity}` (with `\subsubsection{Incomplete Selection of Primary Studies}`, `\subsubsection{Biased Analysis of Primary Studies}`, and `\subsubsection{Inaccurate Data Extraction}`)
+  8. `\section{Results and Discussion}`
+     - `\subsection{Study Overview}`
+     - `\subsection{Results of RQ1: [Insert Research Question]}` (with dimension-specific `\subsubsection` elements)
+     - `\subsection{Results of RQ2: [Insert Research Question]}`
+     - Further RQs as defined in the protocol.
+  9. `\section{Conclusions}`: Answer review objectives and RQs; summarize key findings, implications, and literature limitations without introducing new evidence.
+  10. `\section{Future Work}`: Translate literature evidence gaps into specific, actionable research directions.
+  11. Unnumbered end sections:
+      - `\section*{Funding}`
+      - `\section*{Acknowledgments}`
+      - `\section*{Conflicts of Interest}`
+      - `\section*{Abbreviations}`
+      - `\section*{References}` (using standard BibTeX referencing matching entries in `3_papers/references.bib`).
+
+### Critical Guidance on Limitations
+* **Intrinsic Literature Limitations ONLY**: When discussing limitations in the synthesis, discussion, conclusions, and future work, **strictly focus on the limitations of the primary literature per se** (e.g., methodological constraints, narrow sample populations, confounding factors, lack of longitudinal validation, unstandardized evaluation metrics, domain assumptions in the reviewed studies).
+* **Do NOT Discuss Search Limitations in Literature Analysis**: Do not discuss review or search limitations (such as search engine boundaries, keyword filtering, retrieval caps, or query omissions) when presenting the state of the art, synthesized evidence, conclusions, or literature limitations. Threats regarding the search process belong solely under `\subsubsection{Incomplete Selection of Primary Studies}` in the Methodology section. Everywhere else, limitations must exclusively reflect deficiencies, weaknesses, and constraints intrinsic to the reviewed literature itself.
+
 Write title/abstract, rationale, methods, results, risk of bias, discussion,
-limitations, registration/amendments, funding/conflicts, and data availability.
+literature limitations, registration/amendments, funding/conflicts, and data availability.
 Disclose agent assistance and human adjudication honestly. Checkpoint the completed
 synthesis. For a living review, run `update`, screen new records in capped batches,
 and document any conclusions that changed.

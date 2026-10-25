@@ -31,6 +31,8 @@ For review work, read `1_workspace/protocol.md`, especially its active overrides
 Complete the research questions, PICOC, eligibility definitions, and extraction
 variables with the user before making substantive review decisions. The initial
 protocol is deliberately unpopulated; it is not a fabricated research project.
+During Stage 01, explicitly consult the user on provider selection (e.g., OpenAlex
+as a single unified index vs. adding arXiv or PubMed), search limits/caps, and date cutoffs.
 Use `init` once and `checkpoint` after each finished batch or protocol change.
 Do not directly edit SQLite; use the CLI. Keep evidence files and PDFs unmodified.
 
@@ -87,7 +89,7 @@ Use an arXiv or PubMed link when DOI is absent; if no external identifier exists
 retain the local citation only and disclose missing metadata. A local PDF link
 can be pending retrieval; do not claim that the file exists until ingestion.
 
-## Calibration and reporting
+## Calibration, reporting, and LaTeX SLR Manuscript
 
 On a user correction, immediately add a dated, concrete permanent rule under
 `## Active Reasoning Clarifications & Overrides` in the protocol. Identify affected
@@ -99,6 +101,11 @@ Run `prisma` for the generated flow block in `synthesis_report.md`. Write narrat
 outside that block. The engine counts records/reports; multiple reports of the
 same study need reviewer linkage before reporting a number of distinct studies.
 Follow PRISMA 2020 reporting items; a flow chart alone is not compliance.
+
+When writing the SLR paper in LaTeX, follow [`1_workspace/SLRBlueprint.tex`](1_workspace/SLRBlueprint.tex):
+* Produce the `.tex` document using the exact preamble packages (`amsmath,amssymb`, `tikz-cd`, `multicol`, `geometry`), paragraph geometry, and section hierarchy prescribed by `SLRBlueprint.tex`.
+* Organize the literature review by research questions with specific subsubsections for evaluated dimensions.
+* **Literature Limitations Rule**: When analyzing limitations (in synthesis, discussion, conclusions, and future work), **focus strictly on intrinsic limitations in the primary literature per se** (e.g., methodological threats, narrow sampling, confounding factors, lack of real-world or longitudinal validation, unstandardized metrics). **Do NOT** discuss search limitations, database coverage, or retrieval caps when discussing literature limitations; search-related limitations belong exclusively in the methodology's threats to validity section.
 
 ## Operations and recovery
 

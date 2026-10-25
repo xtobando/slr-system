@@ -23,13 +23,15 @@ questions as needed before searching or screening.
 
 ## Search strategy
 
-Databases: OpenAlex, arXiv, PubMed.
+Selected providers / databases: OpenAlex (can be configured to OpenAlex only, or include arXiv and PubMed as decided by user).
+Per-provider max results / truncation caps: Default 200 per provider (or user-specified limit).
 Date coverage, languages, publication types: Not yet specified.
+Publication date cutoff (`--since`): Not yet specified.
 Search date and exact executed strings: Preserved in SQLite audit_log.
 Canonical concepts and synonyms: Not yet specified.
 OpenAlex query: Not yet specified.
-arXiv query with field operators: Not yet specified.
-PubMed query with MeSH/free-text alternatives: Not yet specified.
+arXiv query with field operators: Not yet specified (or marked N/A if not queried).
+PubMed query with MeSH/free-text alternatives: Not yet specified (or marked N/A if not queried).
 Search completeness: Review provider totals and all capped/failed runs; do not
 describe a capped query as exhaustive. Preserve each translated string.
 
@@ -55,15 +57,19 @@ the same study; review their relationship before synthesizing both.
 
 Define variable names, units, denominators, time points, comparison groups, and
 missing-data conventions before extraction. Include study design, sample/context,
-intervention, comparison, outcomes, limitations, and RQ mapping where applicable.
+intervention, comparison, outcomes, intrinsic literature limitations, and RQ mapping where applicable.
 Select and justify a domain-appropriate risk-of-bias instrument. Record supporting
 quotes and pages for each assessment; do not fabricate a universal quality score.
 
 ## Synthesis plan
 
-Group evidence by RQ, study design, and comparable outcomes. Explain heterogeneity,
-negative findings, conflicting evidence, and limitations. Do not pool incompatible
-effects or count reports as independent studies. Prespecify any meta-analysis.
+Group evidence by RQ, study design, and comparable outcomes following the structure
+defined in `1_workspace/SLRBlueprint.tex`. Explain heterogeneity, negative findings,
+conflicting evidence, and intrinsic literature limitations. When drafting the paper,
+focus on the limitations within the synthesized primary literature per se (methodological,
+theoretical, sample, and validity constraints), and do not discuss review/search limitations
+outside the methodology section. Do not pool incompatible effects or count reports as
+independent studies. Prespecify any meta-analysis.
 
 ## Active Reasoning Clarifications & Overrides
 
