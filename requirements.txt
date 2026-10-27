@@ -3,5 +3,7 @@ requests>=2.32.3,<3
 python-dotenv>=1.0.1,<2
 PyMuPDF>=1.24.10,<2
 numpy>=1.26.4,<3
-# Optional neural ranking; install separately: python -m pip install 'fastembed>=0.4,<1'
-# Omitting FastEmbed keeps the deterministic TF-IDF fallback fully usable offline.
+# Ranking requires FastEmbed in a compatible Python runtime (3.12 recommended),
+# or a running Ollama embedding service. No lexical fallback.
+# Install in that runtime: python -m pip install 'fastembed>=0.4,<1'
+# Python 3.15 can use 1_workspace/.semantic-venv or SLR_EMBEDDING_PYTHON.

@@ -34,11 +34,29 @@ class FixtureHTTP:
         return None
 
 
+class FixtureEncoder:
+    """Vectors for workflow tests; real-model quality is checked separately."""
+    def __init__(self, workspace, backend=None, model=None):
+        if backend == "tfidf" or os.getenv("SLR_RANK_BACKEND") == "tfidf":
+            raise module.EngineError("TF-IDF is not a semantic backend.")
+        self.identity = {"backend": "fastembed", "model": "fixture-embedding"}
+
+    def encode(self, texts, mode="passage"):
+        return [[0.0, 1.0] if any(word in text.lower() for word in ("geological", "mineral", "ocean"))
+                else [1.0, 0.0] for text in texts]
+
+    def close(self):
+        pass
+
+
 class EngineTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="case-", dir=TEST_ROOT)).resolve()
         assert self.root.is_relative_to(TEST_ROOT)
         self.e = module.Engine(self.root)
+        encoder = patch.object(module, "SemanticEncoder", FixtureEncoder)
+        encoder.start()
+        self.addCleanup(encoder.stop)
         shutil.copyfile(PROJECT / ".gitignore", self.root / ".gitignore")
         shutil.copyfile(PROJECT / "1_workspace/protocol.md", self.root / "1_workspace/protocol.md")
         self.sink = io.StringIO()
@@ -67,6 +85,10 @@ class EngineTests(unittest.TestCase):
         return self.e.conn.execute("SELECT bib_key FROM papers ORDER BY rowid DESC").fetchone()[0]
 
     def decide(self, key, stage="TITLE_ABSTRACT", decision="INCLUDE", quote=None, **extra):
+        try:
+            self.e.require_semantic_pass(self.e.paper(key))
+        except module.EngineError:
+            self.e.rank("machine learning systematic reviews", threshold=0.5)
         args = argparse.Namespace(bib_key=key, stage=stage, decision=decision,
                                   code="EC1" if decision == "EXCLUDE" else "IC1",
                                   devils_advocate="The study population may be outside the specified scope.",
@@ -149,6 +171,7 @@ class EngineTests(unittest.TestCase):
 
     def test_pdf_markers_blank_page_visuals_and_200_dpi(self):
         key = self.add()
+        self.decide(key)
         self.pdf(key)
         self.assertTrue(self.e.ingest(key))
         folder = self.root / "3_papers/parsed_cache" / key
@@ -215,7 +238,7 @@ class EngineTests(unittest.TestCase):
     def test_rank_determinism_and_batch_limits(self):
         key = self.add()
         self.add(title="Geological minerals", doi="10.1/mineral", openalex_id="W9", abstract="Rock formation and mineral composition.")
-        with patch.dict(os.environ, {"SLR_RANK_BACKEND": "tfidf"}):
+        with patch.dict(os.environ, {"SLR_RANK_BACKEND": "fastembed"}):
             self.e.rank("machine learning systematic reviews")
             scores = list(self.e.conn.execute("SELECT semantic_score FROM screening ORDER BY bib_key"))
             self.e.rank("machine learning systematic reviews")
@@ -241,7 +264,8 @@ class EngineTests(unittest.TestCase):
                                  "best_oa_location": {"pdf_url": "https://example.org/paper.pdf"}}]}
         self.e.http = FixtureHTTP(fetch)
         stats = {}
-        rows = list(self.e.openalex("topic", 2, "2024-01-01", stats))
+        with patch.dict(os.environ, {"OPENALEX_API_KEY": "fixture-key"}):
+            rows = list(self.e.openalex("topic", 2, "2024-01-01", stats))
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["abstract"], "first second")
         self.assertEqual(calls[1]["cursor"], "second")

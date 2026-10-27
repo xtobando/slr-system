@@ -4,9 +4,15 @@
 __pycache__/
 *.py[cod]
 .venv/
+.semantic-venv/
 venv/
 1_workspace/.runtime/
 1_workspace/.models/
+1_workspace/.tools/semantic-python/
+1_workspace/.tools/semantic-cache/
+1_workspace/.backups/
+1_workspace/.publication/
+1_workspace/.tools/
 1_workspace/.engine.lock
 1_workspace/.tests/
 1_workspace/validation/case-*/
@@ -23,3 +29,8 @@ venv/
 # PDFs and derived assets remain local; bibliographic metadata is backed up.
 3_papers/raw_pdfs/*
 3_papers/parsed_cache/*
+# Standalone review documents and conversion artifacts stay local.
+1_workspace/*.pdf
+1_workspace/research_proposal_parsed/
+1_workspace/paper/
+1_workspace/_tmp_*.py

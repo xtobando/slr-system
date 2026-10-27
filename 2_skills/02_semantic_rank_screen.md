@@ -1,34 +1,38 @@
-# 02 — Rank, quote, challenge, decide
+# 02 ? Semantic prefilter, then LLM screening
 
-1. Read RQs, PICOC, eligibility, and active overrides. Run
-   `python 2_skills/engine.py rank`. The score combines dense cosine similarity
-   and lexical TF-IDF similarity when FastEmbed is installed; otherwise it is
-   deterministic lexical TF-IDF cosine. The audit records backend and model.
-   Scores are priorities, never probabilities or exclusion thresholds.
-2. Run `python 2_skills/engine.py fetch-batch --phase screen --limit 15`.
-   Process at most 15 abstracts in this turn. Do not collect successive batches
-   into the same turn. Keep the total context below the project ceiling of
-   272,000 tokens and aim below 200,000 with room for tool output.
-3. Copy the relevant exact title/abstract quote first. Identify which criterion
-   it supports. Missing methods or abstract content means uncertainty, not absence.
-4. State the strongest grounded argument for exclusion, even if inclusion seems
-   obvious. Resolve it against the quote and protocol. Do not invent objections.
-5. Record a TITLE_ABSTRACT INCLUDE, EXCLUDE, or MAYBE with the criterion code,
-   quote, devil's-advocate argument, and concise notes using `record-decision`.
-   The command rejects empty arguments and unmatched textual quotes. An INCLUDE
-   code must be IC; an EXCLUDE code must be EC. For MAYBE use the unsettled rule.
-6. Checkpoint after the batch. MAYBE records appear in status but are not recycled
-   automatically into UNSCREENED batches; adjudicate those keys explicitly.
+Collect title/abstract metadata using the exact provider strings in
+`1_workspace/search_strings.txt`. Do not dump thousands of abstracts into the
+LLM context or retrieve PDFs before the semantic prefilter.
 
-CLI form (supply actual source evidence, never these explanatory labels):
+Run `python 2_skills/engine.py rank --backend fastembed --threshold 0.5`, or
+select `--backend ollama` with an installed embedding model. The review owner
+can choose another cutoff. Only title and abstract enter paper embeddings.
+Long text is chunked, pooled and normalized instead of silently losing its
+end. The score is raw cosine similarity against the plan's semantic query.
+Failed embeddings never fall back to TF-IDF or a generative model.
 
-```text
-python 2_skills/engine.py record-decision --bib-key KEY --stage TITLE_ABSTRACT --devils-advocate ARGUMENT --quote QUOTE --decision INCLUDE --code IC1 --notes RATIONALE
-```
+Read counts in `1_workspace/semantic_screening.md` and the full ranking in
+`semantic_ranking.csv`. PASS means score >= threshold; BELOW_THRESHOLD removes
+a record from the automatic reading queue. MISSING_ABSTRACT requires metadata;
+PENDING requires reranking. These states do not overwrite historical scientific
+INCLUDE/EXCLUDE decisions, quotations or extracted evidence.
 
-Before final inclusion, ingest and read full text, invoke vision for relevant
-assets, then record a FULL_TEXT decision. The engine preserves both stages in
-audit events. Title/abstract INCLUDE is not a final included report. Re-screening
-an earlier stage reopens the full-text decision and retains older evidence for
-traceability. Never claim two independent reviewers when one agent performs both
-passes. Use the calibration playbook whenever a user identifies a flaw.
+Use `python 2_skills/engine.py screen-semantic --threshold 0.6` to try a different
+cutoff without reembedding. Explain how the choice changes workload and recall.
+A cutoff of 0.5 is an initial setting, not a universal probability. Scores depend
+on the model, query and pooling scheme. Changes to the plan or metadata require
+reranking. Use the same model and query when comparing cutoffs.
+
+Only now run `python 2_skills/engine.py fetch-batch --phase screen --limit 15`.
+It returns only current passing title/abstract records. Read at most 15 per turn.
+Copy an exact quote first, identify its IC/EC criterion, state the strongest
+grounded argument against inclusion, then record TITLE_ABSTRACT INCLUDE,
+EXCLUDE or MAYBE through `record-decision`. Uncertainty is not an exclusion.
+
+A passing record with INCLUDE advances to `ingest` and PDF reading. Follow
+playbook 03 for full-text eligibility and image inspection. Threshold PASS alone
+is not final inclusion. MAYBE requires explicit adjudication; prior events are
+retained. Checkpoint batches. One agent's two passes are not independent reviewers.
+
+Historical records not returned by the current precise query plan are marked
+OUTSIDE_SEARCH and cannot bypass the search filter using a previous high score.

@@ -1,0 +1,20 @@
+# Executable example, not a validated systematic-review strategy.
+# Replace the topic, dates, translations and semantic query for your own RQs.
+[review]
+since = 2015-01-01
+until = 2026-10-27
+max_results = 5000
+semantic_threshold = 0.5
+semantic_query = Retrieval augmented generation methods for factual question answering, including retrieval quality, answer accuracy, factuality and hallucination evaluation.
+
+[openalex.question_answering]
+db = openalex
+query = ("retrieval augmented generation" OR "retrieval-augmented generation") AND ("question answering" OR factuality OR hallucination)
+
+[arxiv.question_answering]
+db = arxiv
+query = (ti:"retrieval augmented generation" OR abs:"retrieval augmented generation" OR ti:"retrieval-augmented generation" OR abs:"retrieval-augmented generation") AND (ti:"question answering" OR abs:"question answering" OR ti:factuality OR abs:factuality OR ti:hallucination OR abs:hallucination)
+
+[pubmed.question_answering]
+db = pubmed
+query = ("retrieval augmented generation"[Title/Abstract] OR "retrieval-augmented generation"[Title/Abstract]) AND ("question answering"[Title/Abstract] OR factuality[Title/Abstract] OR hallucination[Title/Abstract])

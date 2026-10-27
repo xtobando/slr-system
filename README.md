@@ -16,7 +16,7 @@ The agent wrapper supplies the language model and image-inspection tools. The Py
 - Network access for database queries, PDF downloads, GitHub operations, and the first FastEmbed model download.
 - An agent wrapper with file, terminal, and image-inspection tools for the assisted review workflow. OpenCode is an example; install and authenticate it separately.
 
-The core packages are `requests`, `python-dotenv`, `PyMuPDF`, and `numpy`. FastEmbed is optional. SQLite is provided by Python.
+The core packages are `requests`, `python-dotenv`, `PyMuPDF`, and `numpy`. Ranking requires FastEmbed or Ollama. SQLite is provided by Python.
 
 ### Clone and install
 
@@ -105,43 +105,57 @@ Edit the local `.env` copied from [`.env.example`](.env.example). Empty credenti
 | `CUSTOM_COOKIES_PATH` | Empty | Absolute or project-relative path to a Netscape-format cookie jar for authorized PDF access. |
 | `HTTPS_PROXY` / `HTTP_PROXY` | Empty | Standard HTTP transport proxies; these are separate from a library login URL. |
 | `REQUESTS_CA_BUNDLE` | Empty | Path to a trusted CA bundle when your network requires one. TLS verification stays enabled. |
-| `SLR_RANK_BACKEND` | `auto` | `auto`, `tfidf`, or `fastembed`; see below. |
+| `SLR_RANK_BACKEND` | `fastembed` | Real embeddings: `fastembed` or `ollama`. Legacy `auto` means FastEmbed; TF-IDF is rejected. |
 | `SLR_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | FastEmbed model name. |
+| `SLR_EMBEDDING_PYTHON` | Empty | Compatible interpreter; otherwise detects `.semantic-venv`. |
+| `SLR_EMBEDDING_TIMEOUT` | `600` | Worker/API response timeout in seconds. |
+| `SLR_SEMANTIC_THRESHOLD` | `0.5` | Fallback cosine cutoff; the search plan and CLI can set it explicitly. |
+| `SLR_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama embedding API base URL. |
+| `SLR_OLLAMA_MODEL` | `nomic-embed-text:v1.5` | Installed Ollama embedding model. |
 | `SLR_HTTP_TIMEOUT` | `45` | HTTP read timeout in seconds; connection timeout is 10 seconds. |
 | `SLR_MAX_PDF_MB` | `100` | Download-size limit in units of 1,024 × 1,024 bytes. |
 
 Do not commit `.env`, credentials, or cookie jars. The supplied ignore rules exclude them. Institutional retrieval uses credentials you supply; it does not automate interactive login or guarantee access to every publisher. An HTML login page is rejected as a PDF.
 
-### Enable FastEmbed semantic ranking
+### Real semantic embeddings and threshold screening
 
-Install into the same environment used by the engine:
+Paper selection now follows **precise title/abstract queries -> thousands of metadata records -> dense embedding cosine score -> threshold -> LLM reading -> PDF retrieval**. There is no TF-IDF or hybrid fallback.
 
-```text
-python -m pip install "fastembed>=0.4,<1"
+The main interpreter can remain Python 3.15. FastEmbed can run in a separate compatible environment, automatically detected at `1_workspace/.semantic-venv/`. The following Windows commands require `uv`; if it is not already installed, run `python -m pip install uv` first:
+
+```powershell
+uv venv --python 3.12 1_workspace/.semantic-venv
+uv pip install --python 1_workspace/.semantic-venv/Scripts/python.exe 'fastembed>=0.4,<1'
+python 2_skills/engine.py rank --backend fastembed --threshold 0.5
 ```
 
-Set these lines in `.env`:
+Alternatively install FastEmbed into a supported active Python, or set `SLR_EMBEDDING_PYTHON` to that interpreter's path. Weights and content-addressed embedding caches stay under ignored `1_workspace/.models/`. Long inputs are token-chunked, weighted and normalized; only paper titles and abstracts are embedded. The audit records model weights hashes, runtime version, query hash, input hashes and run ID.
 
-```dotenv
-SLR_RANK_BACKEND=fastembed
-SLR_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+If you already have Python 3.12 and the Windows Python launcher, an alternative without `uv` is:
+
+```powershell
+py -3.12 -m venv 1_workspace/.semantic-venv
+& ./1_workspace/.semantic-venv/Scripts/python.exe -m pip install 'fastembed>=0.4,<1'
 ```
 
-Then complete the research questions and PICOC in the protocol, search for papers, and run:
+Ollama is an alternative embedding service; no generative chat calls are made:
 
-```text
-python 2_skills/engine.py rank
+```powershell
+ollama pull nomic-embed-text:v1.5
+python 2_skills/engine.py rank --backend ollama --model nomic-embed-text:v1.5 --threshold 0.5
 ```
 
-For a nonempty corpus, successful neural ranking reports `"backend": "fastembed+tfidf"` and the selected model. The first run downloads weights to the ignored `1_workspace/.models/` directory. An empty corpus does not load the model and therefore cannot verify the neural installation.
+Start `ollama serve` if it is not already running. `SLR_OLLAMA_URL` defaults to `http://127.0.0.1:11434`. Ollama model digests are recorded, long inputs are chunked and `truncate=false` prevents silent context truncation. Backend failures stop ranking; previous completed scores remain intact.
 
-| Backend | Behavior |
-|---|---|
-| `auto` | Uses FastEmbed when it can be imported; otherwise uses TF-IDF. A model download or inference failure is reported as an error. |
-| `fastembed` | Requires FastEmbed; missing dependencies or model failures produce an error. |
-| `tfidf` | Uses deterministic lexical TF-IDF cosine similarity without model downloads. |
+The default cutoff is recorded in `1_workspace/search_strings.txt`. Change it without recomputing embeddings:
 
-With FastEmbed, the score is `0.8 × neural cosine similarity + 0.2 × TF-IDF cosine similarity`. Papers are ranked using their titles and abstracts against the review's research questions and PICOC. Scores determine reading order, not eligibility or confidence in a finding.
+```powershell
+python 2_skills/engine.py screen-semantic --threshold 0.6
+```
+
+A CLI-selected cutoff is retained for the next ranking with the same model identity, semantic query and plan. Editing the plan or changing models returns to the new plan default unless you pass an explicit cutoff. Scores are raw cosine similarities in [-1, 1], not probabilities. The initial 0.5 cutoff is configurable and model-dependent. Review recall and workload before treating any value as appropriate. PASS records reach the LLM; BELOW_THRESHOLD records stay outside its reading queue. MISSING_ABSTRACT remains a metadata queue, not an eligibility exclusion. OUTSIDE_SEARCH retains historical records that were not returned by the current precise queries; they cannot enter this funnel even with an old high score. Existing eligibility decisions and evidence are retained separately. Changed metadata or search plans require reranking.
+
+The current selection is exported to `1_workspace/semantic_ranking.csv` and `semantic_screening.md`. The report compares passing counts at several thresholds so you can choose a cutoff before the LLM reads records. See [Ollama embeddings](https://docs.ollama.com/api/embed) and [OpenAlex title/abstract search](https://help.openalex.org/api/searching/).
 
 ### Connect an agent wrapper
 
@@ -153,7 +167,7 @@ opencode --model openai/gpt-6.1-sol
 
 The wrapper and provider must actually expose that model identifier; this project does not install OpenCode, authenticate an account, or establish model availability. Verify those steps in the wrapper's documentation. Other wrappers can use the same files and CLI if they can follow [AGENTS.md](AGENTS.md), read local files, execute commands, and inspect PNGs.
 
-The included [opencode.json](opencode.json) registers `./2_skills` with OpenCode's native skill discovery. Start OpenCode from `slr-system/` so this relative path resolves correctly. The model sees the PDF skill's description and can load it when the task needs PDF text and preserved visuals; you do not need to mention the skill or run its CLI command. Restart an existing OpenCode session after adding the configuration. This uses the [OpenCode 2 skill-source configuration](https://opencode.ai/v2/docs/skills).
+The included [opencode.json](opencode.json) configures `./2_skills` as a native skill source and permits loading the PDF skill using OpenCode 2 permissions. Start OpenCode from `slr-system/` so the relative source resolves correctly, and restart existing sessions after configuration changes. Native discovery was verified with OpenCode 2.1.4. The registry loads asynchronously: a single `api --standalone skill.list` call can return before loading finishes. Use `python 1_workspace/validation/check_opencode_skills.py` for a check that waits for registration without invoking a model. [AGENTS.md](AGENTS.md) also provides a direct-file fallback. See the [OpenCode 2 skill-source configuration](https://opencode.ai/v2/docs/skills).
 
 Begin a review session with a prompt such as:
 
@@ -167,7 +181,7 @@ The project sets a 272,000-token context ceiling and recommends a fresh context 
 
 - Search **OpenAlex, arXiv, and PubMed**, recording the executed queries, source memberships, and completion status.
 - Deduplicate bibliographic records, keep stable citation keys, and synchronize a master BibTeX file.
-- Prioritize reading with hybrid neural/lexical ranking or an offline lexical backend.
+- Collect thousands of title/abstract records and prefilter with genuine semantic embeddings and a chosen cosine threshold before LLM reading.
 - Persist title/abstract and full-text decisions with quotations, eligibility codes, and an argument against inclusion.
 - Retrieve available PDFs or accept manually supplied files, extract page-marked text, and render every page as a 200-DPI PNG.
 - Convert a local PDF independently of a review into Markdown with full-page images and figure/formula candidate crops, using the optional PDF-to-Markdown skill.
@@ -229,7 +243,11 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [.env.example](.env.example) | Copy to local `.env` and configure integrations. |
 | [.gitignore](.gitignore) | Controls which credentials, environments, and corpus assets remain local. |
 | [requirements.txt](requirements.txt) | Install the core Python dependencies. FastEmbed is an optional additional installation. |
-| [opencode.json](opencode.json) | Registers `2_skills/` as a native OpenCode skill source and permits loading the PDF skill. |
+| [opencode.json](opencode.json) | Configures `2_skills/` as a native OpenCode skill source and permits loading the PDF skill; verify discovery in your installation. |
+| [search_strings.txt](1_workspace/search_strings.txt) | Exact executable title/abstract search strings, dates, semantic query, and cutoff. |
+| `1_workspace/search_runs/` | Immutable per-run text snapshots of exact queries and collection outcomes. |
+| `1_workspace/semantic_ranking.csv` | Full metadata ranking and PASS/BELOW_THRESHOLD/MISSING_ABSTRACT/PENDING/OUTSIDE_SEARCH states. |
+| `1_workspace/semantic_screening.md` | Current model/run/threshold and prefilter counts. |
 | [protocol.md](1_workspace/protocol.md) | Edit research questions, PICOC, searches, eligibility, extraction variables, synthesis plan, and dated corrections. |
 | `1_workspace/slr_state.sqlite` | Persistent database. Use engine commands for changes; inspect a closed copy for ad hoc analysis. |
 | [extraction_matrix.md](1_workspace/extraction_matrix.md) | Generated evidence table; record evidence through the CLI rather than editing this file. |
@@ -237,6 +255,8 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [validation_report.md](1_workspace/validation_report.md) | Validation scope, test instructions, and deployment-specific limits. |
 | [system_source.md](1_workspace/system_source.md) | Generated source handoff snapshot. Edit actual project files and regenerate when needed. |
 | [validation/test_engine.py](1_workspace/validation/test_engine.py) | Run the reproducible behavioral regression suite in isolated fixture workspaces. |
+| [validation/test_semantic_pipeline.py](1_workspace/validation/test_semantic_pipeline.py) | Test real-vector handling, threshold gating, plan provenance, migrations and missing metadata using controlled fixtures. |
+| [validation/live_semantic.py](1_workspace/validation/live_semantic.py) | Run a real model acceptance example with Unicode text and record the weights identity. |
 | [validation/test_pdf_conversion.py](1_workspace/validation/test_pdf_conversion.py) | Test standalone PDF conversion using synthetic PDFs in isolated directories. |
 | [validation/live_connectors.py](1_workspace/validation/live_connectors.py) | Optional network smoke check against all three databases using isolated fixtures. |
 | [validation/package_source.py](1_workspace/validation/package_source.py) | Regenerates `system_source.md` from the current source files. |
@@ -247,6 +267,9 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [05_reasoning_calibration.md](2_skills/05_reasoning_calibration.md) | Permanent corrections and reassessment of affected papers. |
 | [pdf-to-markdown/SKILL.md](2_skills/pdf-to-markdown/SKILL.md) | Optional local document-conversion skill, separate from the five review stages. |
 | [engine.py](2_skills/engine.py) | Unified deterministic CLI described below. |
+| [SLRBlueprint.tex](1_workspace/SLRBlueprint.tex) | LaTeX manuscript structure; keep search-process limitations in methodology and distinguish them from primary-literature limitations. |
+| [check_opencode_skills.py](1_workspace/validation/check_opencode_skills.py) | Waits for native PDF skill registration without invoking a model. |
+| [prepare_publication.py](1_workspace/validation/prepare_publication.py) | Builds a source-only release in a separate clean upstream clone. |
 | [references.bib](3_papers/references.bib) | Generated bibliography; avoid manual edits because synchronization replaces it. |
 | `3_papers/raw_pdfs/` | Store original PDFs as `<bib_key>.pdf`, using keys already assigned by the database. |
 | `3_papers/parsed_cache/` | Generated per-paper `fulltext.md` and `page_N_visual.png` files. |
@@ -259,7 +282,8 @@ Generated local directories also include `.venv/`, `.models/`, and `skill_update
 flowchart TD
     A[Complete protocol] --> B[Search and deduplicate]
     B --> C[Rank reading priority]
-    C --> D[Screen titles and abstracts]
+    C --> T[Apply semantic cosine threshold]
+    T --> D[LLM reads passing titles and abstracts]
     D --> E[Retrieve PDFs]
     E --> F[Read full text and inspect visuals]
     F --> G[Record full-text eligibility]
@@ -284,22 +308,72 @@ python 2_skills/engine.py status
 
 Complete research questions, PICOC, eligibility codes, source-specific queries, extraction definitions, and the synthesis plan. Set the protocol's `Status:` to `READY` once those definitions are usable. The status label is a coordination aid; it does not certify methodological completeness.
 
-### Search and rank
+### Configure the review and choose an embedding model
 
-Translate the search strategy for each provider: OpenAlex search text, arXiv field expressions, and PubMed field tags/MeSH are not interchangeable. Separate commands preserve those translations. These PowerShell examples prompt for your approved strings:
+1. Edit [protocol.md](1_workspace/protocol.md) to define the research questions, PICOC, eligibility rules and review limits. Edit [search_strings.txt](1_workspace/search_strings.txt) to set the provider-specific queries, date ranges, `semantic_query` and starting `semantic_threshold`. Review the checked-in topic and replace it when starting a different review. A source-only publication uses an executable question-answering example rather than the owner's live review plan; neither an example query nor a default cutoff establishes validated recall.
+2. Edit the local `.env` to choose the backend and model. For example, for FastEmbed:
+
+   ```dotenv
+   SLR_RANK_BACKEND=fastembed
+   SLR_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+   SLR_EMBEDDING_PYTHON=
+   ```
+
+   An empty interpreter setting uses `1_workspace/.semantic-venv` when present, otherwise the interpreter running the engine. Use an **absolute path** for `SLR_EMBEDDING_PYTHON` if you select a different environment. CLI options `--backend` and `--model` override the environment for that ranking; existing process environment variables override values in `.env`.
+3. Choose a model supported by the installed backend. `BAAI/bge-small-en-v1.5` is the current default, has 384 dimensions and was tested locally; it is an English model. The installed FastEmbed catalog also lists `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` for multilingual text. That alternative has not been validated on this review: test it against representative English and Spanish records before relying on its ranking. Models in the catalog differ in architecture, size, input limits and instruction prefixes; this engine's FastEmbed worker requires a tokenizer and ONNX model files. See [FastEmbed's supported models](https://qdrant.github.io/fastembed/examples/Supported_Models/).
+
+   List the catalog from the isolated environment without downloading every model:
+
+   ```powershell
+   @'
+   from fastembed import TextEmbedding
+   for model in TextEmbedding.list_supported_models():
+       print(model['model'], model['description'])
+   '@ | & ./1_workspace/.semantic-venv/Scripts/python.exe -
+   ```
+
+4. To use Ollama instead, install and start Ollama, pull an **embedding** model, and configure its separate settings:
+
+   ```powershell
+   ollama pull nomic-embed-text:v1.5
+   ```
+
+   ```dotenv
+   SLR_RANK_BACKEND=ollama
+   SLR_OLLAMA_MODEL=nomic-embed-text:v1.5
+   SLR_OLLAMA_URL=http://127.0.0.1:11434
+   ```
+
+   `SLR_EMBEDDING_MODEL` applies to FastEmbed; `SLR_OLLAMA_MODEL` applies to Ollama. The local service must expose `/api/tags` and `/api/embed`; the configured model must already be pulled. The engine adds the Nomic search-query/document prefixes for `nomic-embed-text`. Other Ollama models may require different prefixes or context limits; consult their model instructions before using them. Ollama support is covered by mocked API tests but has not been tested against a live Ollama service in this project.
+5. Check the selected backend with `python 1_workspace/validation/live_semantic.py --backend fastembed`, or replace `fastembed` with `ollama`. Add `--model NAME` to test another model without changing `.env`. This downloads model files on first use if needed, caches them locally, and runs a small embedding example without changing review decisions. It checks that the model operates; it does not validate your cutoff or measure review recall.
+
+After changing the model or backend, run `rank` again before using its results. Cosine values and useful cutoffs differ by model, query and corpus; do not transfer `0.5` or any other cutoff as a validated relevance probability. Compare the counts in `semantic_screening.md` and assess the selection against known relevant studies. A normal `rank` uses the configured model; for one run, for example:
 
 ```powershell
-$openAlexQuery = Read-Host "Approved OpenAlex query"
-$arxivQuery = Read-Host "Approved arXiv query"
-$pubmedQuery = Read-Host "Approved PubMed query"
-python 2_skills/engine.py search --query "$openAlexQuery" --dbs openalex --max-results 200
-python 2_skills/engine.py search --query "$arxivQuery" --dbs arxiv --max-results 200
-python 2_skills/engine.py search --query "$pubmedQuery" --dbs pubmed --max-results 200
-python 2_skills/engine.py rank
-python 2_skills/engine.py checkpoint --message "Initial search and ranking"
+python 2_skills/engine.py rank --backend fastembed --model BAAI/bge-small-en-v1.5 --threshold 0.5
 ```
 
-`--max-results` is a per-database limit, not a claim of exhaustive coverage. Review capped and failed searches before proceeding. PubMed searches above its implemented 9,999-record retrieval window need query partitioning. Identifier matches are preferred for deduplication; title-based matches and relationships between preprints and journal reports still need reviewer judgment.
+`--threshold` has highest priority. Otherwise the engine reuses a previously selected threshold for the same plan, semantic query and embedding identity; if none matches, it reads `semantic_threshold` from the plan, then `SLR_SEMANTIC_THRESHOLD`, then `0.5`. `screen-semantic --threshold VALUE` immediately reuses existing scores. Editing the plan, including its default threshold, changes its hash and requires `rank` again.
+
+### Search, rank, and prefilter before LLM reading
+
+Edit [search_strings.txt](1_workspace/search_strings.txt), an executable UTF-8 INI document containing exact Boolean queries for each provider, dates, a 5,000-record-per-query limit, the semantic query and default cutoff. Each query family needs a translation for the selected databases. Providers have different syntax; recorded translations do not establish identical recall.
+
+```powershell
+python 2_skills/engine.py search-plan
+python 2_skills/engine.py rank --backend fastembed --threshold 0.5
+python 2_skills/engine.py fetch-batch --phase screen --limit 15
+```
+
+To collect from selected providers use `search-plan --dbs openalex,arxiv`; override each query's limit with `--max-results 10000`. No PDFs are retrieved and no abstracts are sent to a generative LLM during collection or ranking. The engine itself returns only passing metadata when the agent subsequently requests a batch.
+
+`search-plan --file 1_workspace/another-plan.txt` selects an alternative active plan, which the engine records and reuses for ranking, provenance checks and `update`, including after a restart. Keep it available in the workspace; restore it or select another plan if it is moved. An absolute plan path outside the project is recorded as an absolute path and is not portable. A standalone `search --query` adds records, but they only become eligible for the semantic funnel if the exact provider/query and date scope match the active plan. When splitting one provider/query into date partitions, use non-overlapping inclusive ranges, such as 2015-01-01–2019-12-31 and 2020-01-01–2026-12-31.
+
+Every query execution is saved in `1_workspace/search_runs/<run_id>.txt` and the audit table, including its exact string, dates, scope, retrieved/new/skipped counts and completion status. Missing-title records are skipped and logged without aborting the remaining collection; a run with skips remains explicitly incomplete.
+
+OpenAlex uses `search.title_and_abstract` and 100-record pages. Without a key it uses basic paging, limited to the first 10,000 results; a key enables cursor paging. PubMed's existing 9,999-result window still requires date-partitioned query sections for larger sets. arXiv queries must use `ti:`/`abs:` and PubMed queries `[Title/Abstract]` or `[tiab]`. Full-text searching is not part of this metadata funnel. Thousands of records or a capped query must never be called exhaustive.
+
+Inspect `semantic_screening.md` and the ranking CSV before proceeding. Only PASS rows with current metadata hashes can enter an LLM batch, receive new review decisions, or proceed to PDF ingestion. Historical decisions are retained rather than rewritten by the threshold.
 
 ### Screen titles and abstracts
 
@@ -331,7 +405,7 @@ python 2_skills/engine.py ingest
 python 2_skills/engine.py fetch-batch --phase extract --limit 3
 ```
 
-`ingest` processes currently included papers. To process a specific existing record:
+`ingest` processes currently included papers that also pass the current semantic threshold. To process a specific existing record:
 
 ```powershell
 $bibKey = Read-Host "bib_key to ingest"
@@ -398,9 +472,15 @@ Or ask for the artifact directly:
 
 > Make a Markdown version of this PDF, keeping its formulas and pictures.
 
-The agent loads the skill, runs the converter when useful, inspects the images, and continues your task. The skill description guides selection; merely mentioning a PDF or requesting citation metadata does not require conversion. `metadata.opencode/autoinvoke` is enabled, and `agents/openai.yaml` also permits implicit invocation for compatible hosts that register this directory. Native discovery must be configured in each host; the supplied `opencode.json` configures OpenCode.
+The agent should load the skill, run the converter when useful, inspect the images, and continue your task. The skill description guides selection; merely mentioning a PDF or requesting citation metadata does not require conversion. `metadata.opencode/autoinvoke` is enabled, and `agents/openai.yaml` also permits implicit invocation for compatible hosts that register this directory. If native discovery fails, the instruction in `AGENTS.md` directs the agent to read the skill file directly.
 
-To verify registration on OpenCode 2 without invoking a model, run `opencode api --standalone skill.list` from the project root and look for `pdf-to-markdown`. Normal use does not require this diagnostic or an explicit skill name.
+To check native discovery on OpenCode 2 without invoking a model, run:
+
+```powershell
+python 1_workspace/validation/check_opencode_skills.py
+```
+
+The check starts an authenticated temporary server bound to localhost, waits for `pdf-to-markdown`, then stops the server. Its OpenCode runtime and configuration use temporary directories. Add `--opencode 'C:/path/to/opencode.exe'` if the executable is not on PATH. It checks registration, not whether a model will select the skill for every request. A one-shot `opencode api --standalone skill.list` is not a reliable diagnostic because it may race asynchronous loading. The agent can still follow `AGENTS.md` directly in wrappers without native skill discovery.
 
 For direct terminal use, the underlying command remains available:
 
@@ -454,13 +534,15 @@ python 2_skills/engine.py --help
 python 2_skills/engine.py record-decision --help
 ```
 
-There are **12 commands**. Every application-specific flag is listed below.
+There are **14 commands**. Every application-specific flag is listed below.
 
 | Command | Required flags | Optional flags and defaults | Result |
 |---|---|---|---|
 | `init` | None | None | Creates missing folders/tables, initializes Git if needed, synchronizes bibliography. |
-| `search` | `--query TEXT` | `--dbs openalex,arxiv,pubmed`; `--max-results 200`; `--since YYYY-MM-DD` | Retrieves metadata, deduplicates, updates BibTeX, and records per-database outcomes. `--since` is an inclusive publication-date filter; omit for unrestricted dates. |
-| `rank` | None | `--picoc-text TEXT` | Scores all records. Normally reads Research Questions and PICOC from the protocol; the flag supplies an explicit query instead. |
+| `search` | `--query TEXT` | `--dbs openalex,arxiv,pubmed`; `--max-results 5000`; `--since YYYY-MM-DD`; `--until YYYY-MM-DD` | Searches title/abstract fields, deduplicates, records skipped metadata and saves an exact-query text snapshot. |
+| `search-plan` | None | `--file 1_workspace/search_strings.txt`; `--dbs openalex,arxiv,pubmed`; `--max-results N` | Executes precise provider-specific queries and date bounds from the explicit plan. |
+| `rank` | None | `--picoc-text TEXT`; `--backend fastembed` or `ollama`; `--model NAME`; `--threshold VALUE` | Computes genuine title/abstract embedding cosine scores and applies the threshold. Query/cutoff normally come from search_strings.txt; protocol is a query fallback. |
+| `screen-semantic` | `--threshold VALUE` | None | Reapplies the threshold to a completed semantic run without recomputing embeddings. |
 | `fetch-batch` | `--phase screen` or `--phase extract` | `--limit N`, default/max 15 for screen or 3 for extract | Prints bounded JSON. Positive limits above the phase cap are rejected; a byte budget may reduce output further. |
 | `record-decision` | `--bib-key KEY`; `--stage TITLE_ABSTRACT` or `FULL_TEXT`; `--devils-advocate TEXT`; `--quote TEXT`; `--decision INCLUDE`, `EXCLUDE`, or `MAYBE`; `--code ICn` or `ECn` | `--notes TEXT`, default empty | Validates source evidence, stores the current decision, and preserves a historical audit event. Codes must be defined in the protocol. |
 | `ingest` | None | `--bib-key KEY` | Retrieves and parses all currently included records, or one specified existing key. |
@@ -480,13 +562,15 @@ The database has exactly four application tables:
 | Table | Stores |
 |---|---|
 | `papers` | Stable bibliography keys, bibliographic metadata, DOI/arXiv/PMID/OpenAlex identifiers, source memberships, retrieval status, and local paths. |
-| `screening` | Current stage, score, decision, quotation, criterion code, exclusion argument, and notes for each paper. |
+| `screening` | Current review stage and evidence, plus cosine score, semantic status, ranking run ID and metadata hash. Schema migration preserves existing rows and the four-table architecture. |
 | `extractions` | Variable/value evidence rows with quotation, physical page, and visual-inspection assertion. |
 | `audit_log` | Query provenance, historical screening decisions, ingestion events, ranking backend, update outcomes, and checkpoint information. |
 
 SQLite's internal bookkeeping tables are not additional application tables. The current screening row changes as work progresses; audit events preserve prior decisions for PRISMA and reassessment. This is an application audit trail, not a tamper-proof external ledger. Source hashes detect PDFs changed since parsing and prevent recording against stale text.
 
 ### Backups and recovery
+
+The semantic-workflow migration keeps a local SQLite backup under ignored `1_workspace/.backups/`. Embedding runtimes, their caches and model weights stay local.
 
 ```text
 python 2_skills/engine.py checkpoint --message "Review milestone"
@@ -501,15 +585,36 @@ A checkpoint commits `1_workspace/` and `3_papers/references.bib`, subject to `.
 
 Root and skill code are versioned by ordinary Git commits. Checkpoints do not automatically run after every engine command and never push. The playbooks instruct the agent to checkpoint after completed batches and protocol changes.
 
-To back up committed work remotely, run a normal push after confirming the remote and branch:
+Review checkpoints can contain protocol details, quotations, a bibliography and SQLite state. Keep that history in a private backup destination if the review data is not intended for publication. `.gitignore` excludes new standalone PDFs, conversion artifacts and tools, but does not remove files already tracked or present in earlier commits.
 
-```text
-git remote -v
-git status --short
-git push
+### Publish the system source separately from review data
+
+Prepare a fresh clone beneath the ignored `1_workspace/.publication/` directory. This starts from the current public history and preserves upstream changes, including [SLRBlueprint.tex](1_workspace/SLRBlueprint.tex), without merging private review checkpoints. The following commands run from the working project root:
+
+```powershell
+git clone --no-tags --single-branch --branch main https://github.com/xtobando/slr-system.git 1_workspace/.publication/slr-system
+python 1_workspace/validation/prepare_publication.py --destination 1_workspace/.publication/slr-system
+git -C 1_workspace/.publication/slr-system switch -c publication/semantic-review
+git -C 1_workspace/.publication/slr-system diff --stat
 ```
 
-Your clone normally tracks its source branch. GitHub authentication is handled by your Git installation. Keep a separate authorized backup of original PDFs and any derived assets you need; a local Git history cannot protect against losing the disk.
+Use an unused clone path if the example destination already exists. The preparation command requires a clean clone at its fetched `origin/main`; it refuses an upstream database or bibliography containing review records. It copies an explicit source allowlist, preserves empty upstream protocol/report/matrix templates, writes an executable example search plan, and rebuilds the source bundle from those public files. It does not copy the live SQLite database, review outputs, signed proposal, PDF assets, model weights, executable tools, `.env`, or the working repository's local commits.
+
+After reviewing that prepared tree, run its tests with the working environment and commit there. For example, from the original project root:
+
+```powershell
+python -m unittest discover -s 1_workspace/.publication/slr-system/1_workspace/validation -p 'test_*.py' -v
+git -C 1_workspace/.publication/slr-system add --all
+git -C 1_workspace/.publication/slr-system commit -m "Add real semantic screening and configurable workflow"
+```
+
+To publish the reviewed source branch, push from that separate clone and open a pull request:
+
+```text
+git -C 1_workspace/.publication/slr-system push -u origin HEAD
+```
+
+Do not push a live review's `main` branch to a public repository merely to publish code. GitHub authentication is handled by your Git installation. Keep a separate authorized backup of original PDFs and any derived assets you need; a local Git history cannot protect against losing the disk.
 
 For recovery, preserve the current directory and restore an earlier commit into a separate clone or checkout. Restore its matching corpus backup before reviewing full-text evidence. Avoid resetting a dirty review directory. One process at a time may operate on the workspace; do not concurrently write the same SQLite file from multiple machines. For OneDrive or similar synchronization, work locally or pause synchronization during writes and sync closed checkpoints.
 
@@ -520,9 +625,9 @@ python 2_skills/engine.py update
 python 2_skills/engine.py status
 ```
 
-`update` reuses recorded query/database pairs and their limits, starting from the latest successful search's start date with inclusive overlap. Deduplication handles repeat hits. Capped and failed searches do not advance their success watermark. If there are recorded queries, the protocol must be usable for reranking. If none exist, the command can still check upstream skills and checkpoint.
+When a search plan exists, `update` refreshes only recorded query/database pairs still present in that plan, preserving their upper date bounds. It reuses their limits, starting from the latest successful search's start date with inclusive overlap. Deduplication handles repeat hits. Capped and failed searches do not advance their success watermark. If there are recorded queries, the protocol must be usable for reranking. If none exist, the command can still check upstream skills and checkpoint.
 
-The update checks the current Git branch's configured upstream. When available, it fetches that remote and stages `.py` and `.md` files from `2_skills/` under `1_workspace/skill_updates/<commit>/2_skills/`. Review diffs and validate changes before manually applying them. No staged code is executed or installed, and the review workspace is not replaced by a remote copy. A normal clone tracks its own remote branch; receiving changes from a different source repository requires an intentional Git upstream configuration.
+The update checks the current Git branch's configured upstream. When available, it fetches that remote and stages `.py`, `.md`, and `.yaml` files from `2_skills/` under `1_workspace/skill_updates/<commit>/2_skills/`. Review diffs and validate changes before manually applying them. No staged code is executed or installed, and the review workspace is not replaced by a remote copy. A normal clone tracks its own remote branch; receiving changes from a different source repository requires an intentional Git upstream configuration.
 
 There is **no built-in timer or scheduler**. Invoke `update` manually or have your wrapper invoke it. New results still need screening and extraction. Publication-date filtering can miss delayed indexing, so periodically rerun the original full queries and report remaining search limitations.
 
@@ -555,7 +660,7 @@ Validation uses ignored `case-*` and `live-*` fixture directories beneath `1_wor
 | Symptom | Next step |
 |---|---|
 | `rank` requests completed RQs/PICOC | Fill those protocol sections or explicitly supply `--picoc-text`; keep the protocol authoritative for real review work. |
-| FastEmbed is missing or model download fails | Install into the active interpreter, check network/model access, or explicitly select `SLR_RANK_BACKEND=tfidf`. |
+| FastEmbed is missing or model download fails | Install into the active interpreter, check network/model access, or configure the Ollama embedding backend. Lexical fallback is disabled. |
 | Search is capped or incomplete | Inspect provider totals/errors, raise the per-database cap when appropriate, or partition the query; document coverage. |
 | Quote does not match | Copy exact source text and check physical page numbering. For image-only evidence, inspect the image and use the correct visual assertion. |
 | `NEEDS_MANUAL_PDF` | Save the legitimate PDF at the reported key-specific path and rerun `ingest --bib-key`. |

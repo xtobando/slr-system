@@ -11,10 +11,12 @@ assert root.is_relative_to(TEST_ROOT)
 engine = module.Engine(root)
 try:
     results = []
-    for db, query in (("openalex", "systematic review"), ("arxiv", 'all:"systematic review"'),
-                      ("pubmed", "systematic review[Title]")):
+    for db, query in (("openalex", '"systematic review"'),
+                      ("arxiv", '(ti:"systematic review" OR abs:"systematic review")'),
+                      ("pubmed", '"systematic review"[Title/Abstract]')):
         stats = {}
         try:
+            module.validate_metadata_query(db, query)
             first = next(iter(getattr(engine, db)(query, 1, None, stats)))
             results.append({"db": db, "ok": bool(first["title"]), "title": first["title"],
                             "total": stats.get("total"), "identifier": first.get("doi") or first.get("pmid") or first.get("arxiv_id")})

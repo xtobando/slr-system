@@ -1,40 +1,40 @@
-# 01 — Protocol and Provider-Configurable Paper Gathering
+# 01 — Protocol and three-database search
+
+The executable strings are in `1_workspace/search_strings.txt`. Each section
+records a provider-specific title/abstract Boolean query; [review] records dates,
+a 5,000-record-per-query default, the embedding query and cutoff. Execute
+`python 2_skills/engine.py search-plan`, optionally with `--dbs openalex,arxiv`.
+Each run saves the exact query and outcome in `search_runs/<run_id>.txt` and
+SQLite audit history. OpenAlex uses search.title_and_abstract; arXiv uses ti:/abs:;
+PubMed uses [Title/Abstract]. Do not search full text or fetch PDFs at this stage.
+Records without titles are logged and skipped; such runs remain incomplete.
+OpenAlex uses 100-record pages, basic paging up to 10,000 without a key, or
+cursor paging with a key. Caps, skips and provider errors must be disclosed.
 
 Read AGENTS.md and the active protocol overrides. Complete the RQs, PICOC, date
 range, publication types, eligibility rules, extraction variables, and synthesis
 plan. Change protocol Status to READY when these definitions are usable. Do not
 choose an arbitrary research topic to fill the template.
 
-## User-Driven Provider Selection and Capping in OpenCode
+Before the first search, agree on selected providers, per-query caps, and date
+cutoffs, then record them in the protocol and executable search plan. Reuse
+already authorized settings. OpenAlex can be the selected general index;
+arXiv and PubMed provide complementary coverage for preprints and biomedical
+literature. Justify the provider set for the RQs rather than claiming that any
+single index guarantees complete coverage. The current plan defaults to 5,000
+records per query; explicitly report caps and split large queries when needed.
 
-Before executing any database queries, the model must interactively consult and
-confirm with the user through OpenCode:
-
-1. **Target Providers / Databases**:
-   - Determine which providers to query (`openalex`, `arxiv`, `pubmed`, or a combination).
-   - *Default recommendation*: For most domains (e.g., Computer Science, Engineering, Social Sciences), **OpenAlex alone** is often sufficient as it comprehensively indexes Crossref, PubMed, arXiv, and institutional repositories. Highlight to the user that OpenAlex unifies search syntax.
-   - For biomedical reviews requiring specific MeSH vocabulary trees, include `pubmed`.
-   - For fast-moving AI/ML topics requiring preprints before publisher indexing, include `arxiv`.
-2. **Per-Provider Result Limits (`--max-results`)**:
-   - Confirm whether the user wants to truncate or limit papers retrieved per provider (e.g., 50, 100, 200, 500). Default is 200 per database.
-3. **Date Cutoffs (`--since YYYY-MM-DD`)**:
-   - Confirm whether the search should be bounded by publication date.
-
-Record the agreed database selection, caps, and queries in `1_workspace/protocol.md`.
-
-## Execution and Translation
-
-Translate concepts separately for each selected provider:
-- **OpenAlex** uses its `search` syntax or filter expressions.
-- **arXiv** uses fielded expressions such as `all:` or `ti:`.
-- **PubMed** supports field tags such as `[Title/Abstract]` and MeSH terms.
-
-Use separate `search --dbs` invocations when syntax or caps differ per provider:
+Translate concepts separately: OpenAlex uses its `search` syntax; arXiv uses
+fielded expressions such as `all:` or `ti:`; PubMed supports field tags and MeSH.
+There is no universally equivalent Boolean string. Record each translation and
+its limits in the protocol. Use separate `search --dbs` invocations when syntax
+differs. `--max-results` applies per database, not to the combined corpus.
 
 ```text
 python 2_skills/engine.py init
-python 2_skills/engine.py search --query "retrieval augmented generation" --dbs openalex --max-results 150
-python 2_skills/engine.py search --query "all:\"retrieval augmented generation\"" --dbs arxiv --max-results 50
+python 2_skills/engine.py search --query "retrieval augmented generation" --dbs openalex --max-results 5000
+python 2_skills/engine.py search --query '(ti:"retrieval augmented generation" OR abs:"retrieval augmented generation")' --dbs arxiv --max-results 5000
+python 2_skills/engine.py search --query '"retrieval augmented generation"[Title/Abstract]' --dbs pubmed --max-results 5000
 python 2_skills/engine.py checkpoint --message "Search round recorded"
 ```
 

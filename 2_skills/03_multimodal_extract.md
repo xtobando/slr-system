@@ -5,7 +5,8 @@ use the optional [PDF-to-Markdown skill](pdf-to-markdown/SKILL.md). Its
 `convert-pdf` command creates separate artifacts without changing review state.
 It does not replace the database-linked `ingest` workflow described here.
 
-Run `python 2_skills/engine.py ingest` after title/abstract inclusion, or use
+Run `python 2_skills/engine.py ingest` after a current semantic PASS and
+title/abstract inclusion, or use
 `--bib-key` for a particular paper. The engine tries an existing local PDF first,
 then OA metadata, configured Unpaywall, and an optional institutional library URL.
 Cookies must be Netscape format, scoped to domains, and obtained through lawful

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic SLR engine. Python 3.10+, no LLM service calls.
+"""SLR engine. Python 3.10+, real embeddings and no generative LLM calls.
 
 Run from any working directory; all project paths derive from this file.
 Search provenance and historical decisions fit inside the prescribed four tables.
@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import configparser
+import csv
 import hashlib
 import html
+import io
 import http.cookiejar
 import json
 import math
 import os
+import queue
 from pathlib import Path
 import re
 import shutil
@@ -21,7 +25,9 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import traceback
 import unicodedata
 from collections import Counter, defaultdict
 from datetime import date, datetime, timezone
@@ -103,6 +109,258 @@ def iso_date(value):
         return date.fromisoformat(value).isoformat()
     except ValueError as exc:
         raise argparse.ArgumentTypeError("expected YYYY-MM-DD") from exc
+
+
+def cosine_threshold(value):
+    number = float(value)
+    if not math.isfinite(number) or not -1 <= number <= 1:
+        raise argparse.ArgumentTypeError("cosine threshold must be between -1 and 1")
+    return number
+
+
+def metadata_text(paper):
+    return compact(paper.get("title")) + "\n\n" + compact(paper.get("abstract"))
+
+
+def text_digest(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def validate_metadata_query(db, query):
+    if db == "openalex":
+        return
+    value = r'(?:"[^"\n]+"|[^\s():\[\]"]+)'
+    atom = (r'(?:ti|abs):' + value if db == "arxiv" else value + r'\[(?:Title/Abstract|tiab)\]')
+    remaining = re.sub(atom + r'|\b(?:AND|OR|NOT)\b|[()]', '', query, flags=re.I)
+    if remaining.strip() or not re.search(atom, query, re.I):
+        raise EngineError(f"Every {db} query term must explicitly target title/abstract; quote phrases and use ti:/abs: or [Title/Abstract].")
+
+
+def unit_vector(vector, dimension=None):
+    try:
+        values = [float(value) for value in vector]
+    except (TypeError, ValueError) as exc:
+        raise EngineError("Embedding service returned an invalid vector.") from exc
+    if not values or (dimension is not None and len(values) != dimension) or not all(map(math.isfinite, values)):
+        raise EngineError("Embedding dimensions or numeric values are invalid.")
+    scale = max(abs(value) for value in values)
+    if scale == 0:
+        raise EngineError("Embedding service returned a zero vector.")
+    scaled = [value / scale for value in values]
+    norm = math.sqrt(sum(value * value for value in scaled))
+    if scale < 1e-12 / norm:
+        raise EngineError("Embedding service returned a zero vector.")
+    return [value / norm for value in scaled]
+
+
+def embedding_worker():
+    """Private JSON-lines worker: a compatible Python can run ONNX independently."""
+    sys.stdin.reconfigure(encoding="utf-8", errors="strict")
+    sys.stdout.reconfigure(encoding="utf-8", errors="strict")
+    from importlib.metadata import version
+    try:
+        setup = json.loads(sys.stdin.readline())
+        with contextlib.redirect_stdout(sys.stderr):
+            from fastembed import TextEmbedding
+            from tokenizers import Tokenizer
+            model = TextEmbedding(model_name=setup["model"], cache_dir=setup["cache"], threads=4)
+        native = model.model
+        tokenizer = Tokenizer.from_str(native.tokenizer.to_str())
+        maximum = min(384, (tokenizer.truncation or {}).get("max_length", 512) - 64)
+        if maximum < 32:
+            raise EngineError("Embedding tokenizer context is too small.")
+        tokenizer.no_truncation()
+        tokenizer.no_padding()
+        model_dir = Path(native._model_dir)
+        artifacts = {p.relative_to(model_dir).as_posix(): file_sha256(p)
+                     for p in sorted(model_dir.rglob("*.onnx"))}
+        if not artifacts:
+            raise EngineError("Cannot fingerprint embedding model weights.")
+        identity = {"backend": "fastembed", "model": setup["model"], "version": version("fastembed"),
+                    "artifacts": artifacts, "chunk_tokens": maximum, "pooling": "token-weighted-mean-v1"}
+        print(json.dumps({"ready": identity}), flush=True)
+        for line in sys.stdin:
+            message = json.loads(line)
+            decoded, owners, weights = [], [], []
+            for index, text in enumerate(message["texts"]):
+                if not isinstance(text, str):
+                    raise EngineError("Embedding input must be text, received " + type(text).__name__)
+                try:
+                    tokens = tokenizer.encode(text, add_special_tokens=False).ids
+                except TypeError as exc:
+                    raise EngineError("Tokenizer rejected a text input: " + str(exc)) from exc
+                chunks = [tokens[i:i + maximum] for i in range(0, len(tokens), maximum)]
+                if not chunks:
+                    raise EngineError("Cannot embed empty text.")
+                decoded.extend(tokenizer.decode(chunk, skip_special_tokens=True) for chunk in chunks)
+                owners.extend([index] * len(chunks))
+                weights.extend(len(chunk) for chunk in chunks)
+            # Length buckets avoid padding every short abstract to the longest
+            # chunk; small CPU batches also keep ONNX memory bounded.
+            order = sorted(range(len(decoded)), key=lambda index: weights[index])
+            decoded = [decoded[index] for index in order]
+            owners = [owners[index] for index in order]
+            weights = [weights[index] for index in order]
+            pooled = [None] * len(message["texts"])
+            with contextlib.redirect_stdout(sys.stderr):
+                method = model.query_embed if message["mode"] == "query" else model.passage_embed
+                encoded = method(decoded, batch_size=4)
+                count = 0
+                for vector in encoded:
+                    if count >= len(owners):
+                        raise EngineError("Embedding model returned too many chunks.")
+                    owner, weight = owners[count], weights[count]
+                    normalized = unit_vector(vector)
+                    if pooled[owner] is None:
+                        pooled[owner] = [0.0] * len(normalized)
+                    for j, value in enumerate(normalized):
+                        pooled[owner][j] += value * weight
+                    count += 1
+            if count != len(owners):
+                raise EngineError("Embedding model returned the wrong number of chunks.")
+            vectors = [unit_vector(vector) for vector in pooled]
+            print(json.dumps({"vectors": vectors}), flush=True)
+    except Exception as exc:
+        frames = traceback.extract_tb(exc.__traceback__)
+        location = " -> ".join(f"{Path(frame.filename).name}:{frame.lineno}" for frame in frames[-3:])
+        print(json.dumps({"error": str(exc) if isinstance(exc, EngineError) else type(exc).__name__ + " at " + location}), flush=True)
+        return 1
+    return 0
+
+
+class SemanticEncoder:
+    """Real dense embeddings only. Never substitutes lexical scores."""
+    def __init__(self, workspace, backend=None, model=None):
+        self.workspace = Path(workspace)
+        self.backend = backend or os.getenv("SLR_RANK_BACKEND", "fastembed")
+        if self.backend == "auto":
+            self.backend = "fastembed"
+        if self.backend not in ("fastembed", "ollama"):
+            raise EngineError("Semantic ranking requires fastembed or ollama; TF-IDF fallback was removed.")
+        self.model = model or (os.getenv("SLR_OLLAMA_MODEL", "nomic-embed-text:v1.5") if self.backend == "ollama"
+                               else os.getenv("SLR_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"))
+        self.process, self.session, self.inbox = None, None, queue.Queue()
+        self.timeout = float(os.getenv("SLR_EMBEDDING_TIMEOUT", "600"))
+        try:
+            if self.backend == "ollama":
+                import requests
+                self.requests = requests
+                self.url = os.getenv("SLR_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+                parsed = urlparse(self.url)
+                if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+                    raise EngineError("SLR_OLLAMA_URL must be an HTTP(S) service URL without credentials.")
+                self.session = requests.Session()
+                self.session.trust_env = False
+                tags = self.ollama_request("GET", "/api/tags")
+                names = (self.model, self.model + ":latest")
+                entry = next((item for item in tags.get("models", []) if item.get("name") in names), None)
+                if not entry or not entry.get("digest"):
+                    raise EngineError("Ollama embedding model is not installed; run ollama pull " + self.model)
+                self.identity = {"backend": "ollama", "model": entry["name"], "digest": entry["digest"],
+                                 "chunk_utf8_bytes": 1024, "pooling": "byte-weighted-mean-v1"}
+            else:
+                configured = os.getenv("SLR_EMBEDDING_PYTHON")
+                isolated = self.workspace / ".semantic-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+                python = configured or (str(isolated) if isolated.is_file() else sys.executable)
+                self.process = subprocess.Popen([python, "-X", "utf8", str(Path(__file__).resolve()), "_embedding-worker"],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None, text=True, encoding="utf-8",
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                def read_output():
+                    for line in self.process.stdout:
+                        self.inbox.put(line)
+                    self.inbox.put(None)
+                threading.Thread(target=read_output, daemon=True).start()
+                self.send({"model": self.model, "cache": str(self.workspace / ".models")})
+                self.identity = self.receive()["ready"]
+            fingerprint = text_digest(json.dumps(self.identity, sort_keys=True))
+            self.cache = self.workspace / ".models/embeddings" / fingerprint
+        except Exception:
+            self.close()
+            raise
+
+    def send(self, message):
+        try:
+            self.process.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+            self.process.stdin.flush()
+        except (OSError, ValueError) as exc:
+            raise EngineError("Embedding worker stopped; install FastEmbed in a compatible Python environment.") from exc
+
+    def receive(self):
+        try:
+            line = self.inbox.get(timeout=self.timeout)
+        except queue.Empty as exc:
+            raise EngineError("Embedding worker timed out; check model download or runtime.") from exc
+        if line is None:
+            raise EngineError("Embedding worker stopped. Install FastEmbed in Python 3.12 or configure Ollama.")
+        result = json.loads(line)
+        if result.get("error"):
+            raise EngineError("Semantic embedding failed: " + result["error"])
+        return result
+
+    def ollama_request(self, method, path, body=None):
+        try:
+            with self.session.request(method, self.url + path, json=body, timeout=(10, self.timeout)) as response:
+                if response.status_code >= 400:
+                    raise EngineError(f"Ollama returned HTTP {response.status_code}; check model and context size. No lexical fallback.")
+                return response.json()
+        except EngineError:
+            raise
+        except (self.requests.RequestException, ValueError) as exc:
+            raise EngineError("Cannot reach Ollama embedding service; start ollama serve or select FastEmbed.") from exc
+
+    def encode(self, texts, mode="passage"):
+        vectors = [None] * len(texts)
+        missing = []
+        for index, text in enumerate(texts):
+            path = self.cache / (text_digest(mode + "\n" + text) + ".json")
+            try:
+                vectors[index] = unit_vector(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError, EngineError):
+                missing.append((index, text, path))
+        for start in range(0, len(missing), 32):
+            batch = missing[start:start + 32]
+            if self.backend == "fastembed":
+                self.send({"mode": mode, "texts": [item[1] for item in batch]})
+                computed = self.receive()["vectors"]
+            else:
+                computed = []
+                prefix = ("search_query: " if mode == "query" else "search_document: ") if self.model.startswith("nomic-embed-text") else ""
+                for _, text, _ in batch:
+                    chunks, current = [], ""
+                    for char in text:
+                        if current and len((current + char).encode("utf-8")) > 1024:
+                            chunks.append(current)
+                            current = ""
+                        current += char
+                    if current:
+                        chunks.append(current)
+                    response = self.ollama_request("POST", "/api/embed", {"model": self.model,
+                        "input": [prefix + part for part in chunks], "truncate": False})
+                    values = response.get("embeddings", [])
+                    if len(values) != len(chunks):
+                        raise EngineError("Ollama returned the wrong number of embeddings.")
+                    normalized = [unit_vector(value) for value in values]
+                    computed.append(unit_vector([sum(v[j] * len(c.encode("utf-8")) for v, c in zip(normalized, chunks))
+                                                 for j in range(len(normalized[0]))]))
+            if len(computed) != len(batch):
+                raise EngineError("Embedding service returned the wrong batch size.")
+            for (index, _, path), vector in zip(batch, computed):
+                vectors[index] = unit_vector(vector)
+                atomic_write(path, json.dumps(vectors[index]))
+        return vectors
+
+    def close(self):
+        if self.process:
+            if self.process.stdin:
+                self.process.stdin.close()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+            self.process.stdout.close()
+        if self.session:
+            self.session.close()
 
 
 def atomic_write(path, content):
@@ -405,6 +663,14 @@ class Engine:
         self.conn.execute("PRAGMA journal_mode=DELETE")
         self.conn.execute("PRAGMA synchronous=FULL")
         self.conn.executescript(SCHEMA)
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(screening)")}
+        for name, definition in (("semantic_status", "TEXT NOT NULL DEFAULT 'PENDING'"),
+                                 ("semantic_run_id", "TEXT"), ("semantic_text_sha256", "TEXT")):
+            if name not in columns:
+                self.conn.execute(f"ALTER TABLE screening ADD COLUMN {name} {definition}")
+        self.conn.commit()
+        self._title_index = None
+        self._scope_cache = None
         self.http = None
 
     def close(self):
@@ -501,7 +767,12 @@ class Engine:
         existing = next(iter(matches.values()), None)
         if existing is None:
             normalized = title_id(record["title"])
-            for row in self.conn.execute("SELECT * FROM papers ORDER BY bib_key"):
+            if self._title_index is None:
+                self._title_index = defaultdict(list)
+                for row in self.conn.execute("SELECT bib_key,title FROM papers ORDER BY bib_key"):
+                    self._title_index[title_id(row["title"])].append(row["bib_key"])
+            for candidate in self._title_index.get(normalized, []):
+                row = self.conn.execute("SELECT * FROM papers WHERE bib_key=?", (candidate,)).fetchone()
                 conflicting = any(row[f] and record.get(f) and row[f] != record[f] for f in identifiers)
                 if (normalized and title_id(row["title"]) == normalized and not conflicting
                         and (not row["year"] or not record.get("year") or row["year"] == record["year"])):
@@ -531,6 +802,8 @@ class Engine:
                               f"VALUES({','.join('?' for _ in range(len(fields)+2))})",
                               [key, db] + [record.get(f) for f in fields])
             self.conn.execute("INSERT INTO screening(bib_key) VALUES(?)", (key,))
+            if self._title_index is not None:
+                self._title_index[title_id(record["title"])].append(key)
         else:
             key = existing["bib_key"]
             for field in ("doi", "arxiv_id", "pmid", "openalex_id", "abstract", "oa_pdf_url", "venue", "year"):
@@ -540,6 +813,8 @@ class Engine:
                 self.conn.execute("UPDATE papers SET authors=? WHERE bib_key=?", (record["authors"], key))
             sources = sorted(set((existing["source_db"] or "").split(",")) | {db})
             self.conn.execute("UPDATE papers SET source_db=? WHERE bib_key=?", (",".join(filter(None, sources)), key))
+            if not existing.get("abstract") and compact(record.get("abstract")):
+                self.conn.execute("UPDATE screening SET semantic_status='PENDING',semantic_run_id=NULL WHERE bib_key=?", (key,))
         source_id = record.get({"openalex": "openalex_id", "arxiv": "arxiv_id", "pubmed": "pmid"}[db])
         source_id = source_id or record.get("doi") or title_id(record["title"])
         self.audit("search", "record", {"run_id": run_id, "db": db, "source_id": source_id,
@@ -547,15 +822,21 @@ class Engine:
         return is_new
 
     def openalex(self, query, maximum, since, stats):
-        params = {"search": query, "per-page": min(maximum, 200), "cursor": "*"}
+        use_cursor = bool(os.getenv("OPENALEX_API_KEY"))
+        params = {"search.title_and_abstract": query, "per-page": min(maximum, 100)}
+        params.update({"cursor": "*"} if use_cursor else {"page": 1})
         for env, param in (("OPENALEX_EMAIL", "mailto"), ("OPENALEX_API_KEY", "api_key")):
             if os.getenv(env):
                 params[param] = os.environ[env]
-        if since:
-            params["filter"] = "from_publication_date:" + since
+        filters = (["from_publication_date:" + since] if since else [])
+        if getattr(self, "search_until", None):
+            filters.append("to_publication_date:" + self.search_until)
+        if filters:
+            params["filter"] = ",".join(filters)
         count, cursors = 0, set()
         while count < maximum:
-            params["per-page"] = min(200, maximum - count)
+            if use_cursor:
+                params["per-page"] = min(100, maximum - count)
             data = self.net().data("https://api.openalex.org/works", params)
             stats["total"] = int(data.get("meta", {}).get("count", 0))
             items = data.get("results", [])
@@ -579,6 +860,13 @@ class Engine:
                        "abstract": " ".join(positions[i] for i in sorted(positions)),
                        "oa_pdf_url": location.get("pdf_url")}
                 count += 1
+                if count >= maximum:
+                    return
+            if not use_cursor:
+                if count >= stats["total"] or params["page"] * params["per-page"] >= 10_000:
+                    return
+                params["page"] += 1
+                continue
             cursor = data.get("meta", {}).get("next_cursor")
             if not cursor:
                 return
@@ -591,8 +879,9 @@ class Engine:
         ns = {"a": "http://www.w3.org/2005/Atom", "x": "http://arxiv.org/schemas/atom",
               "o": "http://a9.com/-/spec/opensearch/1.1/"}
         effective = query
-        if since:
-            effective = f"({query}) AND submittedDate:[{since.replace('-', '')}0000 TO 300001010000]"
+        until = getattr(self, "search_until", None)
+        if since or until:
+            effective = f"({query}) AND submittedDate:[{(since or '1900-01-01').replace('-', '')}0000 TO {(until or '2999-12-31').replace('-', '')}2359]"
         start = 0
         while start < maximum:
             data = self.net().data("https://export.arxiv.org/api/query", {
@@ -626,8 +915,10 @@ class Engine:
         start = 0
         while start < min(maximum, 9999):
             params = dict(common, term=query, retstart=start, retmax=min(200, maximum-start, 9999-start))
-            if since:
-                params.update(mindate=since.replace("-", "/"), maxdate="3000/01/01", datetype="pdat")
+            until = getattr(self, "search_until", None)
+            if since or until:
+                params.update(mindate=(since or "1900-01-01").replace("-", "/"),
+                              maxdate=(until or "2999-12-31").replace("-", "/"), datetype="pdat")
             result = self.net().data(base + "esearch.fcgi", params, xml=True)
             if result.find(".//ERROR") is not None or result.find("ErrorList") is not None:
                 raise EngineError("PubMed rejected the query; check field tags and spelling.")
@@ -667,26 +958,40 @@ class Engine:
             if start >= stats["total"]:
                 return
 
-    def search(self, query, dbs, maximum, since=None):
+    def search(self, query, dbs, maximum, since=None, until=None):
         if not compact(query):
             raise EngineError("Search query cannot be empty.")
+        if since and until and since > until:
+            raise EngineError("Search start date is after its end date.")
         unknown = set(dbs) - set(DBS)
         if unknown:
             raise EngineError("Unknown database: " + ", ".join(sorted(unknown)))
         reports = []
+        self.search_until = until
         for db in dict.fromkeys(dbs):
             run_id = uuid.uuid4().hex
             stats = {"run_id": run_id, "db": db, "max_results": maximum, "since": since,
+                     "until": until, "scope": "title_and_abstract", "fetched": 0, "skipped": 0,
                      "started": datetime.now(timezone.utc).isoformat(), "retrieved": 0, "new": 0}
             with self.conn:
                 self.audit("search", "started", stats, query)
             try:
+                validate_metadata_query(db, query)
                 for record in getattr(self, db)(query, maximum, since, stats):
+                    stats["fetched"] += 1
+                    if not compact(record.get("title")):
+                        stats["skipped"] += 1
+                        with self.conn:
+                            self.audit("search", "record_skipped", {"run_id": run_id, "db": db,
+                                       "reason": "missing_title", "source_id": record.get("openalex_id") or record.get("pmid") or record.get("arxiv_id")})
+                        continue
                     with self.conn:
                         is_new = self.upsert(record, db, run_id)
                     stats["retrieved"] += 1
                     stats["new"] += int(is_new)
-                stats["complete"] = stats["retrieved"] >= stats.get("total", stats["retrieved"])
+                    if stats["fetched"] % 500 == 0:
+                        print(f"{db}: {stats['fetched']} title/abstract records fetched", file=sys.stderr)
+                stats["complete"] = stats["fetched"] >= stats.get("total", stats["fetched"]) and not stats["skipped"]
                 action = "completed" if stats["complete"] else "capped"
             except (EngineError, ValueError, ET.ParseError, KeyError, TypeError) as exc:
                 stats["error"] = str(exc) if isinstance(exc, EngineError) else type(exc).__name__
@@ -695,6 +1000,9 @@ class Engine:
             with self.conn:
                 self.audit("search", action, stats, query)
             reports.append(dict(stats, outcome=action))
+            atomic_write(self.workspace / "search_runs" / (run_id + ".txt"),
+                         f"Database: {db}\nScope: title and abstract only\nExact query:\n{query}\n\n" +
+                         json.dumps(dict(stats, outcome=action), indent=2, ensure_ascii=False) + "\n")
         self.sync_bib()
         print(json.dumps(reports, indent=2, ensure_ascii=False))
         return all(r["complete"] for r in reports)
@@ -714,62 +1022,262 @@ class Engine:
             raise EngineError("Complete the RQs and PICOC in protocol.md, or supply --picoc-text.")
         return result
 
-    @staticmethod
-    def lexical_scores(query, documents):
-        def terms(text):
-            return Counter(re.findall(r"\b\w+\b", text.casefold()))
-        counts = [terms(d) for d in documents]
-        frequency = Counter(term for row in counts for term in row)
-        idf = {term: math.log((1 + len(counts)) / (1 + freq)) + 1 for term, freq in frequency.items()}
-        def vector(count):
-            weights = {term: (1 + math.log(n)) * idf[term] for term, n in count.items() if term in idf}
-            norm = math.sqrt(sum(w*w for w in weights.values())) or 1
-            return {term: weight/norm for term, weight in weights.items()}
-        q = vector(terms(query))
-        return [max(0.0, min(1.0, sum(q.get(term, 0)*weight for term, weight in vector(row).items())))
-                for row in counts]
-
-    def rank(self, picoc_text=None):
-        query = picoc_text if picoc_text is not None else self.protocol_query()
-        if not compact(query):
-            raise EngineError("Ranking query cannot be empty.")
-        rows = self.conn.execute("SELECT bib_key,title,abstract FROM papers ORDER BY bib_key").fetchall()
-        documents = [compact(r["title"]) + " " + compact(r["abstract"]) for r in rows]
-        scores = self.lexical_scores(query, documents)
-        backend, model_name = "tfidf", None
-        requested = os.getenv("SLR_RANK_BACKEND", "auto").lower()
-        if requested not in ("auto", "tfidf", "fastembed"):
-            raise EngineError("SLR_RANK_BACKEND must be auto, tfidf, or fastembed.")
-        if documents and requested != "tfidf":
-            try:
-                from fastembed import TextEmbedding
-                import numpy as np
-            except ImportError:
-                if requested == "fastembed":
-                    raise EngineError("FastEmbed was requested but is not installed.") from None
-                print("FastEmbed absent: using deterministic TF-IDF cosine.", file=sys.stderr)
-            else:
-                model_name = os.getenv("SLR_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
-                try:
-                    model = TextEmbedding(model_name=model_name, cache_dir=str(self.workspace / ".models"))
-                    q = np.asarray(next(iter(model.query_embed(query))), dtype=float)
-                    q /= max(float(np.linalg.norm(q)), 1e-12)
-                    # Stream document vectors; do not retain a corpus-wide dense matrix.
-                    for i, v in enumerate(model.passage_embed(documents, batch_size=32)):
-                        v = np.asarray(v, dtype=float)
-                        cosine = max(0.0, min(1.0, float(np.dot(q, v) / max(np.linalg.norm(v), 1e-12))))
-                        scores[i] = 0.8 * cosine + 0.2 * scores[i]
-                    backend = "fastembed+tfidf"
-                except Exception as exc:
-                    raise EngineError(f"Neural ranking failed ({type(exc).__name__}); set SLR_RANK_BACKEND=tfidf for offline ranking.") from None
+    def search_plan(self, filename=None, dbs=None, maximum=None):
+        path = (self.root / (filename or "1_workspace/search_strings.txt")).resolve()
+        config = configparser.ConfigParser(interpolation=None)
+        if not config.read(path, encoding="utf-8") or "review" not in config:
+            raise EngineError("Search plan requires a [review] section in search_strings.txt.")
+        self.plan_queries(config)
+        review = config["review"]
+        selected = set(dbs or DBS)
+        if selected - set(DBS):
+            raise EngineError("Unknown search-plan database.")
+        jobs = [(name, section) for name, section in config.items()
+                if name not in ("DEFAULT", "review") and section.get("db") in selected]
+        if not jobs:
+            raise EngineError("No matching query sections in the search plan.")
+        prepared = []
+        for name, section in jobs:
+            query = section.get("query", "").strip()
+            if not query:
+                raise EngineError("Search plan section has no query: " + name)
+            validate_metadata_query(section["db"], query)
+            count = maximum or positive(section.get("max_results", review.get("max_results", "5000")))
+            since = section.get("since", review.get("since"))
+            until = section.get("until", review.get("until"))
+            if since:
+                since = iso_date(since)
+            if until:
+                until = iso_date(until)
+            if since and until and since > until:
+                raise EngineError("Search plan start date is after its end date.")
+            prepared.append((name, section["db"], query, count, since, until))
+        try:
+            plan_ref = path.relative_to(self.root).as_posix()
+        except ValueError:
+            plan_ref = str(path)
         with self.conn:
-            self.conn.executemany("UPDATE screening SET semantic_score=?,updated_at=CURRENT_TIMESTAMP WHERE bib_key=?",
-                                  [(float(score), row["bib_key"]) for row, score in zip(rows, scores)])
-            self.audit("ranking", "ranked", {"backend": backend, "model": model_name,
-                       "papers": len(rows), "query_sha256": hashlib.sha256(query.encode()).hexdigest()}, query)
-        print(json.dumps({"ranked": len(rows), "backend": backend, "model": model_name}))
+            self.audit("search", "plan_selected", {"path": plan_ref, "plan_sha256": file_sha256(path)})
+        complete = True
+        for name, db, query, count, since, until in prepared:
+            with self.conn:
+                self.audit("search", "plan_section", {"section": name, "plan_sha256": file_sha256(path)}, query)
+            complete = self.search(query, [db], count, since, until) and complete
+        return complete
+
+    def active_search_plan(self):
+        row = self.conn.execute("SELECT notes FROM audit_log WHERE phase='search' AND action='plan_selected' ORDER BY id DESC LIMIT 1").fetchone()
+        if not row:
+            return self.workspace / "search_strings.txt"
+        path = (self.root / json.loads(row[0])["path"]).resolve()
+        if not path.is_file():
+            raise EngineError("The active search plan is missing; restore it or select another with search-plan --file.")
+        return path
+
+    def semantic_query(self):
+        path = self.active_search_plan()
+        if path.exists():
+            config = configparser.ConfigParser(interpolation=None)
+            config.read(path, encoding="utf-8")
+            if config.has_option("review", "semantic_query"):
+                return config["review"]["semantic_query"].strip()
+        return self.protocol_query()
+
+    @staticmethod
+    def plan_queries(plan):
+        review = plan["review"] if "review" in plan else {}
+        planned = defaultdict(list)
+        for name, section in plan.items():
+            if name in ("DEFAULT", "review"):
+                continue
+            db, query = section.get("db"), section.get("query", "").strip()
+            if db not in DBS or not query:
+                raise EngineError("Search plan section requires a supported db and a query: " + name)
+            lower = section.get("since", review.get("since")) or None
+            upper = section.get("until", review.get("until")) or None
+            lower = iso_date(lower) if lower else None
+            upper = iso_date(upper) if upper else None
+            if lower and upper and lower > upper:
+                raise EngineError("Search plan start date is after its end date.")
+            bounds = (lower, upper)
+            for existing in planned[(db, query)]:
+                if existing == bounds:
+                    continue
+                old_lower, old_upper = existing
+                if ((not upper or not old_lower or upper >= old_lower) and
+                        (not old_upper or not lower or old_upper >= lower)):
+                    raise EngineError("Date partitions for the same database and query must not overlap: " + name)
+            if bounds not in planned[(db, query)]:
+                planned[(db, query)].append(bounds)
+        return planned
+
+    @staticmethod
+    def search_within_bounds(event, bounds):
+        lower, upper = bounds
+        if event.get("since") and event.get("until") and event["since"] > event["until"]:
+            return False
+        return ((not lower or event.get("since") and event["since"] >= lower) and
+                (not upper or event.get("until") and event["until"] <= upper))
+
+    def search_candidate_keys(self):
+        """Only metadata actually returned by this plan's scoped searches qualifies."""
+        path = self.active_search_plan()
+        if not path.exists():
+            return None
+        last = self.conn.execute("SELECT MAX(id) FROM audit_log WHERE phase='search'").fetchone()[0]
+        token = (str(path), file_sha256(path), last)
+        if self._scope_cache and self._scope_cache[0] == token:
+            return self._scope_cache[1]
+        plan = configparser.ConfigParser(interpolation=None)
+        plan.read(path, encoding="utf-8")
+        planned = self.plan_queries(plan)
+        if not planned:
+            return None
+        runs, keys = set(), set()
+        for row in self.conn.execute("SELECT action,query_executed,notes FROM audit_log WHERE phase='search' AND action IN ('started','record') ORDER BY id"):
+            event = json.loads(row["notes"])
+            if row["action"] == "started":
+                bounds = planned.get((event["db"], row["query_executed"]), [])
+                if (event.get("scope") == "title_and_abstract" and
+                        any(self.search_within_bounds(event, pair) for pair in bounds)):
+                    runs.add(event["run_id"])
+            elif event["run_id"] in runs:
+                keys.add(event["bib_key"])
+        self._scope_cache = (token, keys)
+        return keys
+
+    def rank(self, picoc_text=None, backend=None, model=None, threshold=None):
+        explicit_threshold = threshold is not None
+        query = picoc_text if picoc_text is not None else self.semantic_query()
+        if not compact(query):
+            raise EngineError("Semantic ranking query cannot be empty.")
+        plan = self.active_search_plan()
+        plan_digest = file_sha256(plan) if plan.exists() else None
+        try:
+            plan_ref = plan.relative_to(self.root).as_posix()
+        except ValueError:
+            plan_ref = str(plan)
+        settings = configparser.ConfigParser(interpolation=None)
+        settings.read(plan, encoding="utf-8")
+        default = settings.get("review", "semantic_threshold", fallback=os.getenv("SLR_SEMANTIC_THRESHOLD", "0.5"))
+        threshold = cosine_threshold(threshold if threshold is not None else default)
+        rows = [dict(row) for row in self.conn.execute("SELECT bib_key,title,abstract FROM papers ORDER BY bib_key")]
+        allowed = self.search_candidate_keys()
+        candidates = [row for row in rows if compact(row["abstract"]) and (allowed is None or row["bib_key"] in allowed)]
+        encoder = SemanticEncoder(self.workspace, backend=backend, model=model)
+        scored = []
+        run_id = uuid.uuid4().hex
+        try:
+            identity = encoder.identity
+            previous = self.conn.execute("SELECT notes FROM audit_log WHERE phase='semantic' AND action='threshold_applied' ORDER BY id DESC LIMIT 1").fetchone()
+            previous = json.loads(previous[0]) if previous else {}
+            if (not explicit_threshold and previous.get("plan_sha256") == plan_digest and
+                    previous.get("query_sha256") == text_digest(query) and
+                    previous.get("embedding_identity_sha256") == text_digest(json.dumps(identity, sort_keys=True))):
+                threshold = cosine_threshold(previous["threshold"])
+            q = unit_vector(encoder.encode([query], mode="query")[0])
+            for start in range(0, len(candidates), 32):
+                batch = candidates[start:start + 32]
+                vectors = encoder.encode([metadata_text(row) for row in batch])
+                if len(vectors) != len(batch):
+                    raise EngineError("Embedding service returned the wrong paper count.")
+                for paper, vector in zip(batch, vectors):
+                    vector = unit_vector(vector, len(q))
+                    score = max(-1.0, min(1.0, sum(a * b for a, b in zip(q, vector))))
+                    scored.append((score, run_id, text_digest(metadata_text(paper)), paper["bib_key"]))
+                print(f"Semantic embeddings: {min(start + 32, len(candidates))}/{len(candidates)}", file=sys.stderr)
+        finally:
+            encoder.close()
+        if plan_digest and (not plan.exists() or file_sha256(plan) != plan_digest):
+            raise EngineError("Search plan changed during embedding; rerun rank. Previous scores were preserved.")
+        # Publish a complete ranking only; a failed service cannot leave mixed scores.
+        with self.conn:
+            self.conn.execute("UPDATE screening SET semantic_status='MISSING_ABSTRACT',semantic_run_id=?,semantic_text_sha256=NULL", (run_id,))
+            self.conn.executemany("""UPDATE screening SET semantic_score=?,semantic_run_id=?,semantic_text_sha256=?,
+                semantic_status='SCORED',updated_at=CURRENT_TIMESTAMP WHERE bib_key=?""", scored)
+            self.audit("ranking", "ranked", {"run_id": run_id, "backend": identity["backend"],
+                       "model": identity["model"], "identity": identity, "papers": len(rows), "scored": len(scored),
+                       "plan_sha256": plan_digest,
+                       "plan_path": plan_ref,
+                       "score_type": "cosine", "fields": ["title", "abstract"], "query_sha256": text_digest(query)}, query)
+        return self.semantic_screen(threshold)
+
+    def latest_semantic_ranking(self):
+        row = self.conn.execute("SELECT notes FROM audit_log WHERE phase='ranking' AND action='ranked' ORDER BY id DESC LIMIT 1").fetchone()
+        ranking = json.loads(row[0]) if row else {}
+        if ranking.get("score_type") != "cosine" or not ranking.get("run_id"):
+            raise EngineError("Run rank with a real embedding model before semantic screening or LLM reading.")
+        plan = self.active_search_plan()
+        ranked_plan = (self.root / ranking.get("plan_path", "1_workspace/search_strings.txt")).resolve()
+        if ranked_plan != plan.resolve():
+            raise EngineError("The active search plan changed since ranking; rerun rank before LLM reading or PDF retrieval.")
+        if ranking.get("plan_sha256") and (not plan.exists() or file_sha256(plan) != ranking["plan_sha256"]):
+            raise EngineError("Search plan changed since ranking; rerun rank before LLM reading or PDF retrieval.")
+        return ranking
+
+    def require_semantic_pass(self, paper):
+        ranking = self.latest_semantic_ranking()
+        allowed = self.search_candidate_keys()
+        if allowed is not None and paper["bib_key"] not in allowed:
+            raise EngineError("Paper was not returned by the current precise title/abstract search plan.")
+        row = self.conn.execute("SELECT * FROM screening WHERE bib_key=?", (paper["bib_key"],)).fetchone()
+        if (row["semantic_status"] != "PASS" or row["semantic_run_id"] != ranking["run_id"] or
+                row["semantic_text_sha256"] != text_digest(metadata_text(paper))):
+            raise EngineError("Paper has not passed the current title/abstract semantic threshold; rerank changed metadata first.")
+
+    def semantic_screen(self, threshold=None):
+        ranking = self.latest_semantic_ranking()
+        threshold = cosine_threshold(threshold if threshold is not None else os.getenv("SLR_SEMANTIC_THRESHOLD", "0.5"))
+        rows = [dict(row) for row in self.conn.execute("""SELECT p.*,s.semantic_score,s.semantic_status,
+            s.semantic_run_id,s.semantic_text_sha256 FROM papers p JOIN screening s USING(bib_key) ORDER BY s.semantic_score DESC,p.bib_key""")]
+        states = Counter()
+        valid_scores = []
+        allowed = self.search_candidate_keys()
+        with self.conn:
+            for row in rows:
+                valid = row["semantic_run_id"] == ranking["run_id"] and row["semantic_text_sha256"] == text_digest(metadata_text(row))
+                state = ("OUTSIDE_SEARCH" if allowed is not None and row["bib_key"] not in allowed
+                         else "MISSING_ABSTRACT" if not compact(row["abstract"]) else "PENDING" if not valid
+                         else "PASS" if row["semantic_score"] >= threshold else "BELOW_THRESHOLD")
+                states[state] += 1
+                if state in ("PASS", "BELOW_THRESHOLD"):
+                    valid_scores.append(row["semantic_score"])
+                row["semantic_status"] = state
+                self.conn.execute("UPDATE screening SET semantic_status=? WHERE bib_key=?", (state, row["bib_key"]))
+            sweep = [{"threshold": value, "passed": sum(score >= value for score in valid_scores)}
+                     for value in sorted({threshold, 0.4, 0.5, 0.6, 0.7, 0.8})]
+            event = {"run_id": ranking["run_id"], "threshold": threshold, "counts": dict(states), "threshold_counts": sweep,
+                     "plan_sha256": ranking.get("plan_sha256"), "query_sha256": ranking["query_sha256"],
+                     "embedding_identity_sha256": text_digest(json.dumps(ranking["identity"], sort_keys=True)),
+                     "backend": ranking["backend"], "model": ranking["model"], "score_type": "cosine"}
+            self.audit("semantic", "threshold_applied", event)
+        output = io.StringIO(newline="")
+        fields = ["bib_key", "semantic_score", "semantic_status", "title", "abstract", "doi", "semantic_run_id"]
+        writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            exported = dict(row)
+            for field in ("title", "abstract"):
+                value = exported.get(field)
+                if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
+                    exported[field] = "'" + value
+            if row["semantic_status"] in ("PENDING", "MISSING_ABSTRACT", "OUTSIDE_SEARCH"):
+                exported["semantic_score"] = ""
+            writer.writerow(exported)
+        atomic_write(self.workspace / "semantic_ranking.csv", output.getvalue())
+        report = ("# Semantic title/abstract screening\n\n```json\n" + json.dumps(event, indent=2) + "\n```\n\n"
+                  "| Cosine threshold | Passing records |\n|---:|---:|\n" +
+                  "\n".join(f"| {row['threshold']:g} | {row['passed']} |" for row in sweep) +
+                  "\n\nScores are raw cosine similarities, not probabilities. The cutoff is a review setting, "
+                  "not a calibrated universal relevance boundary. Only PASS records enter LLM batches or PDF retrieval. "
+                  "Missing abstracts remain pending metadata, not scientific exclusions. Previous eligibility decisions "
+                  "and extraction evidence remain in audit history; the semantic prefilter is a separate stage.\n")
+        atomic_write(self.workspace / "semantic_screening.md", report)
+        print(json.dumps(event, indent=2))
+        return event
 
     def fetch_batch(self, phase, limit=None):
+        ranking = self.latest_semantic_ranking()
         cap = 15 if phase == "screen" else 3
         limit = cap if limit is None else limit
         if limit > cap:
@@ -777,22 +1285,38 @@ class Engine:
         if phase == "screen":
             rows = self.conn.execute("""SELECT p.bib_key,p.title,p.abstract,p.year,p.doi,p.arxiv_id,p.pmid,
                 s.semantic_score FROM papers p JOIN screening s USING(bib_key)
-                WHERE s.stage='UNSCREENED' ORDER BY s.semantic_score DESC,p.bib_key LIMIT ?""", (limit,)).fetchall()
-            items = [dict(row) for row in rows]
+                WHERE s.stage='UNSCREENED' AND s.semantic_status='PASS' AND s.semantic_run_id=?
+                ORDER BY s.semantic_score DESC,p.bib_key""", (ranking["run_id"],)).fetchall()
+            items = []
+            for row in rows:
+                paper = dict(row)
+                try:
+                    self.require_semantic_pass(paper)
+                except EngineError:
+                    continue
+                items.append(paper)
+                if len(items) >= limit:
+                    break
         else:
             rows = self.conn.execute("""SELECT p.bib_key,p.title,p.local_md_path,p.local_pdf_path,p.pdf_status,
                 s.stage,s.semantic_score FROM papers p JOIN screening s USING(bib_key)
-                WHERE s.decision='INCLUDE' AND p.local_md_path IS NOT NULL
+                WHERE s.decision='INCLUDE' AND p.local_md_path IS NOT NULL AND s.semantic_status='PASS' AND s.semantic_run_id=?
                 ORDER BY (SELECT COUNT(*) FROM extractions e WHERE e.bib_key=p.bib_key),
-                s.semantic_score DESC,p.bib_key LIMIT ?""", (limit,)).fetchall()
+                s.semantic_score DESC,p.bib_key""", (ranking["run_id"],)).fetchall()
             items = []
             for row in rows:
                 item = dict(row)
+                try:
+                    self.require_semantic_pass(self.paper(row["bib_key"]))
+                except EngineError:
+                    continue
                 folder = self.papers_dir / "parsed_cache" / row["bib_key"]
                 item["visual_assets"] = [p.relative_to(self.root).as_posix() for p in sorted(folder.glob("page_*_visual.png"))]
                 item["extracted_variables"] = [r[0] for r in self.conn.execute(
                     "SELECT DISTINCT variable_name FROM extractions WHERE bib_key=?", (row["bib_key"],))]
                 items.append(item)
+                if len(items) >= limit:
+                    break
         # A conservative UTF-8 byte cap bounds new tool text, not the wrapper's history or image tokens.
         while len(json.dumps(items, ensure_ascii=False).encode()) > 120_000:
             if len(items) == 1:
@@ -833,6 +1357,7 @@ class Engine:
 
     def record_decision(self, args):
         paper = self.paper(args.bib_key)
+        self.require_semantic_pass(paper)
         if not compact(args.devils_advocate):
             raise EngineError("A substantive devil's-advocate argument is required.")
         if not re.fullmatch(r"(?:IC|EC)\d+", args.code):
@@ -987,14 +1512,20 @@ class Engine:
             import pymupdf as fitz
         except ImportError as exc:
             raise EngineError("Install PyMuPDF before ingesting PDFs.") from exc
+        ranking = self.latest_semantic_ranking()
         rows = [self.paper(key)] if key else [dict(r) for r in self.conn.execute(
-            "SELECT p.* FROM papers p JOIN screening s USING(bib_key) WHERE s.decision='INCLUDE' ORDER BY p.bib_key")]
+            "SELECT p.* FROM papers p JOIN screening s USING(bib_key) WHERE s.decision='INCLUDE' "
+            "AND s.semantic_status='PASS' AND s.semantic_run_id=? ORDER BY p.bib_key", (ranking["run_id"],))]
         cookie_path = os.getenv("CUSTOM_COOKIES_PATH")
         cookie_file = ((self.root / cookie_path).resolve() if cookie_path else None)
         client = None
         results = []
         try:
             for paper in rows:
+                self.require_semantic_pass(paper)
+                prior = self.conn.execute("SELECT decision FROM screening WHERE bib_key=?", (paper["bib_key"],)).fetchone()
+                if prior["decision"] != "INCLUDE":
+                    raise EngineError("PDF retrieval requires a post-semantic INCLUDE decision.")
                 pdf = self.papers_dir / "raw_pdfs" / (paper["bib_key"] + ".pdf")
                 errors = []
                 if not pdf.exists():
@@ -1067,6 +1598,7 @@ class Engine:
 
     def record_extraction(self, args):
         paper = self.paper(args.bib_key)
+        self.require_semantic_pass(paper)
         state = self.conn.execute("SELECT stage,decision FROM screening WHERE bib_key=?", (args.bib_key,)).fetchone()
         if tuple(state) != ("FULL_TEXT", "INCLUDE"):
             raise EngineError("Extraction requires FULL_TEXT INCLUDE.")
@@ -1121,7 +1653,11 @@ class Engine:
         excluded_ta = Counter(e["criterion_code"] for e in ta.values() if e["decision"] == "EXCLUDE")
         excluded_ft = Counter(e["criterion_code"] for e in ft.values() if e["decision"] == "EXCLUDE")
         canonical = set(source_records.values())
-        return {"identified_by_db": {db: by_db[db] for db in DBS}, "identified": len(source_records),
+        semantic = Counter(row[0] for row in self.conn.execute("SELECT semantic_status FROM screening"))
+        return {"semantic_passed": semantic["PASS"], "semantic_below_threshold": semantic["BELOW_THRESHOLD"],
+                "semantic_outside_search": semantic["OUTSIDE_SEARCH"],
+                "semantic_missing_abstract": semantic["MISSING_ABSTRACT"], "semantic_pending": semantic["PENDING"],
+                "identified_by_db": {db: by_db[db] for db in DBS}, "identified": len(source_records),
                 "duplicates_removed": len(source_records) - len(canonical), "unique_records": len(papers),
                 "without_search_provenance": len(set(papers) - canonical), "screened": len(ta),
                 "unscreened": len(papers)-len(ta), "ta_excluded": sum(excluded_ta.values()),
@@ -1140,8 +1676,12 @@ class Engine:
         for db, count in c["identified_by_db"].items():
             lines.append(f"| Identified: {db} | {count} |")
         names = [("identified", "Identified source records"), ("duplicates_removed", "Duplicates removed"),
+                 ("semantic_passed", "Passed semantic title/abstract threshold"),
+                 ("semantic_below_threshold", "Below semantic threshold (automatic prefilter)"),
+                 ("semantic_missing_abstract", "Pending abstract metadata"), ("semantic_pending", "Awaiting semantic ranking"),
+                 ("semantic_outside_search", "Outside current precise search plan (historical records)"),
                  ("unique_records", "Unique records"), ("without_search_provenance", "Records lacking search provenance"),
-                 ("unscreened", "Awaiting title/abstract screening"), ("screened", "Title/abstract screened"),
+                 ("unscreened", "Not reviewed by LLM (includes prefiltered records)"), ("screened", "Title/abstract screened"),
                  ("ta_excluded", "Excluded at title/abstract"), ("ta_maybe", "Title/abstract MAYBE"),
                  ("fulltext_sought", "Full-text reports sought"), ("manual_pdf", "NEEDS_MANUAL_PDF (not retrieved)"),
                  ("retrieval_pending", "Retrieval pending"), ("retrieved", "Reports retrieved"),
@@ -1234,7 +1774,7 @@ class Engine:
             mode, kind, blob = metadata.split()
             path = Path(name)
             if (mode not in ("100644", "100755") or kind != "blob" or path.is_absolute()
-                    or ".." in path.parts or path.parts[0] != "2_skills" or path.suffix not in (".py", ".md")):
+                    or ".." in path.parts or path.parts[0] != "2_skills" or path.suffix not in (".py", ".md", ".yaml")):
                 raise EngineError("Upstream contains an unsupported skill path or symlink; review manually.")
             content = self.git("show", blob, binary=True)
             if len(content) > 5_000_000:
@@ -1249,21 +1789,39 @@ class Engine:
 
     def update(self):
         jobs = {}
+        plan = configparser.ConfigParser(interpolation=None)
+        plan.read(self.active_search_plan(), encoding="utf-8")
+        planned = self.plan_queries(plan)
         for row in self.conn.execute("""SELECT action,query_executed,notes FROM audit_log
             WHERE phase='search' AND action IN ('started','completed','capped','failed') ORDER BY id"""):
             data = json.loads(row["notes"])
             pair = (data["db"], row["query_executed"])
-            job = jobs.setdefault(pair, {"since": data.get("since"), "maximum": data["max_results"]})
-            job["maximum"] = data["max_results"]
-            if row["action"] == "completed":
-                job["since"] = data["started"][:10]
-        if jobs:
-            query = self.protocol_query()  # Fail before retrieval if the protocol is not usable.
+            if planned:
+                bounds_list = [bounds for bounds in planned.get(pair, []) if self.search_within_bounds(data, bounds)]
+            else:
+                bounds_list = [(data.get("since"), data.get("until"))]
+            for bounds in bounds_list:
+                key = pair + bounds if planned else pair
+                job = jobs.setdefault(key, {"since": bounds[0], "until": bounds[1], "maximum": data["max_results"]})
+                job["maximum"] = data["max_results"]
+                if row["action"] == "completed":
+                    job["since"] = data["started"][:10]
+        if jobs and not compact(self.semantic_query()):
+            raise EngineError("Define a semantic query in the active search plan before updating.")
         complete = True
-        for (db, original), job in jobs.items():
-            complete = self.search(original, [db], job["maximum"], job["since"]) and complete
+        for key, job in jobs.items():
+            db, original = key[:2]
+            if job.get("until") and job.get("since") and job["since"] > job["until"]:
+                with self.conn:
+                    self.audit("update", "date_window_complete", {"db": db, "since": job["since"], "until": job["until"]}, original)
+                print(f"{db}: publication-date window already ended; rerun the original search to check delayed indexing.")
+                continue
+            if job.get("until"):
+                complete = self.search(original, [db], job["maximum"], job["since"], job["until"]) and complete
+            else:
+                complete = self.search(original, [db], job["maximum"], job["since"]) and complete
         if jobs:
-            self.rank(query)
+            self.rank()
         try:
             skills = self.stage_skill_updates()
         except EngineError as exc:
@@ -1281,6 +1839,9 @@ class Engine:
         state = re.search(r"^Status:\s*(.+)$", text, re.M)
         print("Protocol:", state[1] if state else "MISSING/UNSPECIFIED")
         print("Papers:", self.conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0])
+        print("Semantic prefilter:")
+        for row in self.conn.execute("SELECT semantic_status,COUNT(*) FROM screening GROUP BY semantic_status"):
+            print(f"  {row[0]}: {row[1]}")
         for db in DBS:
             count = self.conn.execute("SELECT COUNT(*) FROM papers WHERE ',' || source_db || ',' LIKE ?",
                                       ("%," + db + ",%",)).fetchone()[0]
@@ -1303,10 +1864,20 @@ def parser():
     search = commands.add_parser("search", help="Search and deduplicate database metadata")
     search.add_argument("--query", required=True)
     search.add_argument("--dbs", default=",".join(DBS))
-    search.add_argument("--max-results", type=positive, default=200)
+    search.add_argument("--max-results", type=positive, default=5000)
     search.add_argument("--since", type=iso_date)
+    search.add_argument("--until", type=iso_date)
+    plan = commands.add_parser("search-plan", help="Collect thousands of title/abstract records using an explicit search_strings.txt plan")
+    plan.add_argument("--file", default="1_workspace/search_strings.txt")
+    plan.add_argument("--dbs", default=",".join(DBS))
+    plan.add_argument("--max-results", type=positive)
     rank = commands.add_parser("rank", help="Rank reading priority without deciding eligibility")
     rank.add_argument("--picoc-text")
+    rank.add_argument("--backend", choices=("fastembed", "ollama"))
+    rank.add_argument("--model")
+    rank.add_argument("--threshold", type=cosine_threshold)
+    semantic = commands.add_parser("screen-semantic", help="Apply a cosine threshold before any LLM reading or PDF retrieval")
+    semantic.add_argument("--threshold", type=cosine_threshold, required=True)
     batch = commands.add_parser("fetch-batch", help="Emit bounded JSON evidence batches")
     batch.add_argument("--phase", choices=("screen", "extract"), required=True)
     batch.add_argument("--limit", type=positive)
@@ -1342,6 +1913,8 @@ def parser():
 
 
 def main(argv=None):
+    if (argv if argv is not None else sys.argv[1:]) == ["_embedding-worker"]:
+        return embedding_worker()
     args = parser().parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -1354,9 +1927,13 @@ def main(argv=None):
             try:
                 result = None
                 if args.command == "search":
-                    result = engine.search(args.query, [d.strip().lower() for d in args.dbs.split(",")], args.max_results, args.since)
+                    result = engine.search(args.query, [d.strip().lower() for d in args.dbs.split(",")], args.max_results, args.since, args.until)
+                elif args.command == "search-plan":
+                    result = engine.search_plan(args.file, [d.strip().lower() for d in args.dbs.split(",")], args.max_results)
                 elif args.command == "rank":
-                    engine.rank(args.picoc_text)
+                    engine.rank(args.picoc_text, args.backend, args.model, args.threshold)
+                elif args.command == "screen-semantic":
+                    engine.semantic_screen(args.threshold)
                 elif args.command == "fetch-batch":
                     engine.fetch_batch(args.phase, args.limit)
                 elif args.command == "record-decision":
@@ -1372,7 +1949,8 @@ def main(argv=None):
                 return 2 if result is False else 0
             finally:
                 engine.close()
-    except (EngineError, sqlite3.Error, OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (EngineError, sqlite3.Error, OSError, ValueError, argparse.ArgumentTypeError,
+            configparser.Error, subprocess.SubprocessError) as exc:
         print("ERROR: " + (str(exc) if isinstance(exc, EngineError) else type(exc).__name__), file=sys.stderr)
         return 1
     except KeyboardInterrupt:

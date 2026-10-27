@@ -24,7 +24,7 @@ questions as needed before searching or screening.
 ## Search strategy
 
 Selected providers / databases: OpenAlex (can be configured to OpenAlex only, or include arXiv and PubMed as decided by user).
-Per-provider max results / truncation caps: Default 200 per provider (or user-specified limit).
+Per-provider max results / truncation caps: 5,000 per query/provider in search_strings.txt (or an explicit override).
 Date coverage, languages, publication types: Not yet specified.
 Publication date cutoff (`--since`): Not yet specified.
 Search date and exact executed strings: Preserved in SQLite audit_log.
