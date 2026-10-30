@@ -25,6 +25,10 @@ It writes a new conversion folder without changing the review database or
 bibliography. Keep its output separate from existing evidence caches. Continue
 using `ingest` for database-linked SLR full-text assessment and extraction.
 
+## LaTeX figures
+
+For editable LaTeX diagrams or plots, load the native latex-visuals skill, or read [latex-visuals/SKILL.md](2_skills/latex-visuals/SKILL.md) directly if native discovery is unavailable. Follow the manuscript's existing build conventions and verify rendered output when a TeX toolchain is available.
+
 ## Start and resume
 
 The review funnel is precise title/abstract queries -> thousands of metadata

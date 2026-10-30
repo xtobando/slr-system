@@ -9,7 +9,7 @@ names = [".env.example", ".gitignore", "requirements.txt", "opencode.json", "AGE
          "2_skills/01_protocol_and_search.md", "2_skills/02_semantic_rank_screen.md",
          "2_skills/03_multimodal_extract.md", "2_skills/04_synthesis_and_bibtex.md",
          "2_skills/05_reasoning_calibration.md", "2_skills/pdf-to-markdown/SKILL.md",
-         "2_skills/pdf-to-markdown/agents/openai.yaml",
+         "2_skills/pdf-to-markdown/agents/openai.yaml", "2_skills/latex-visuals/SKILL.md",
          "2_skills/engine.py", "3_papers/references.bib",
          "1_workspace/validation_report.md", "1_workspace/validation/test_engine.py",
          "1_workspace/validation/test_pdf_conversion.py",

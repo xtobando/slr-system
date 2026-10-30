@@ -22,7 +22,7 @@ SOURCE_FILES = (
     "2_skills/engine.py", "2_skills/01_protocol_and_search.md", "2_skills/02_semantic_rank_screen.md",
     "2_skills/03_multimodal_extract.md", "2_skills/04_synthesis_and_bibtex.md",
     "2_skills/05_reasoning_calibration.md", "2_skills/pdf-to-markdown/SKILL.md",
-    "2_skills/pdf-to-markdown/agents/openai.yaml",
+    "2_skills/pdf-to-markdown/agents/openai.yaml", "2_skills/latex-visuals/SKILL.md",
 )
 TEMPLATES = ("1_workspace/protocol.md", "1_workspace/extraction_matrix.md",
              "1_workspace/synthesis_report.md", "3_papers/references.bib")

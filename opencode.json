@@ -1,7 +1,8 @@
-{
+﻿{
   "$schema": "https://opencode.ai/config.json",
   "skills": ["./2_skills"],
   "permissions": [
-    {"action": "skill", "resource": "pdf-to-markdown", "effect": "allow"}
+    {"action": "skill", "resource": "pdf-to-markdown", "effect": "allow"},
+    {"action": "skill", "resource": "latex-visuals", "effect": "allow"}
   ]
 }

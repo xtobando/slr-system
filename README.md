@@ -4,8 +4,46 @@ A local systematic literature review workspace combining an AI agent's reading a
 
 The agent wrapper supplies the language model and image-inspection tools. The Python engine makes **no LLM API calls**. Review decisions and evidence persist in SQLite and Markdown, so work can resume in a new session.
 
+- [Workflow at a glance](#workflow-at-a-glance)
 - [1. Setup](#1-setup)
 - [2. Usage guide](#2-usage-guide)
+
+
+## Workflow at a glance
+
+A review starts with a question, not a search command. The reviewer defines the protocol and judges the evidence; the engine collects records, tracks decisions and generates reports. An agent can help read and document evidence, but its judgments still need review.
+
+```mermaid
+flowchart LR
+    P[1. Define question<br/>and protocol] --> S[2. Search sources<br/>and deduplicate]
+    S --> R[3. Rank titles<br/>and abstracts]
+    R --> T{Semantic cutoff}
+    T -->|Pass| A[4. Screen title<br/>and abstract]
+    T -->|Below cutoff| B[Outside reading queue<br/>review cutoff and recall]
+    R -->|Missing abstract| M[Resolve missing metadata]
+    A -->|Include| F[5. Retrieve and<br/>read full text]
+    A -->|Maybe| Q[Adjudicate uncertainty]
+    A -->|Exclude| X[Record criterion<br/>and evidence]
+    F -->|Include| E[6. Extract evidence<br/>and assess quality]
+    F -->|Maybe| Q
+    F -->|Exclude| X
+    E --> Y[7. Synthesize<br/>and report]
+```
+
+| Stage | Your role | System output or next action |
+|---|---|---|
+| Define | Set research questions, eligibility, sources and synthesis plan. | Complete [protocol.md](1_workspace/protocol.md) and [search_strings.txt](1_workspace/search_strings.txt). |
+| Search | Check source coverage, query translations, dates and caps. | Search records and completion details are retained; investigate failed or capped runs. |
+| Rank | Choose a model and cutoff; assess recall using labeled examples and known relevant studies. | Scores and queue states appear in `semantic_ranking.csv` and `semantic_screening.md`. |
+| Screen | Check title and abstract against the criteria and record a reason and supporting quote. | INCLUDE moves to retrieval; MAYBE needs adjudication; EXCLUDE needs evidence. |
+| Read and extract | Inspect full text and relevant figures, assess quality, and record source-grounded findings. | Only full-text INCLUDE permits extraction; evidence is recorded in the database and matrix. |
+| Synthesize | Compare evidence, explain uncertainty and write the narrative. | Generate PRISMA counts and maintain citations; checkpoint completed batches. |
+
+**The cutoff matters:** below-threshold records do not enter the normal screening queue, so relevant studies may be missed. A cosine score is not a probability, and the example cutoff is not validated for your review. Missing abstracts and inaccessible PDFs are unresolved work, not evidence of ineligibility. Independent human screening and adjudication, where feasible, help assess errors; an agent reading twice is not independent review.
+
+To resume, read the protocol and run `python 2_skills/engine.py status`. SQLite stores review state; the Markdown reports are readable outputs. Local Git checkpoints do not back up excluded PDFs or push to a remote. See the detailed workflow below for commands, recovery and limitations.
+
+For a manuscript figure, the optional [LaTeX visuals skill](2_skills/latex-visuals/SKILL.md) guides the agent in producing editable TikZ diagrams and PGFPlots figures, compiling and visually checking them when a TeX installation is available.
 
 ## 1. Setup
 
@@ -167,7 +205,7 @@ opencode --model openai/gpt-6.1-sol
 
 The wrapper and provider must actually expose that model identifier; this project does not install OpenCode, authenticate an account, or establish model availability. Verify those steps in the wrapper's documentation. Other wrappers can use the same files and CLI if they can follow [AGENTS.md](AGENTS.md), read local files, execute commands, and inspect PNGs.
 
-The included [opencode.json](opencode.json) configures `./2_skills` as a native skill source and permits loading the PDF skill using OpenCode 2 permissions. Start OpenCode from `slr-system/` so the relative source resolves correctly, and restart existing sessions after configuration changes. Native discovery was verified with OpenCode 2.1.4. The registry loads asynchronously: a single `api --standalone skill.list` call can return before loading finishes. Use `python 1_workspace/validation/check_opencode_skills.py` for a check that waits for registration without invoking a model. [AGENTS.md](AGENTS.md) also provides a direct-file fallback. See the [OpenCode 2 skill-source configuration](https://opencode.ai/v2/docs/skills).
+The included [opencode.json](opencode.json) configures `./2_skills` as a native skill source and permits loading the PDF and LaTeX visuals skills using OpenCode 2 permissions. Start OpenCode from `slr-system/` so the relative source resolves correctly, and restart existing sessions after configuration changes. Native discovery was verified with OpenCode 2.1.4. The registry loads asynchronously: a single `api --standalone skill.list` call can return before loading finishes. Use `python 1_workspace/validation/check_opencode_skills.py` for a check that waits for registration without invoking a model. [AGENTS.md](AGENTS.md) also provides a direct-file fallback. See the [OpenCode 2 skill-source configuration](https://opencode.ai/v2/docs/skills).
 
 Begin a review session with a prompt such as:
 
@@ -243,7 +281,7 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [.env.example](.env.example) | Copy to local `.env` and configure integrations. |
 | [.gitignore](.gitignore) | Controls which credentials, environments, and corpus assets remain local. |
 | [requirements.txt](requirements.txt) | Install the core Python dependencies. FastEmbed is an optional additional installation. |
-| [opencode.json](opencode.json) | Configures `2_skills/` as a native OpenCode skill source and permits loading the PDF skill; verify discovery in your installation. |
+| [opencode.json](opencode.json) | Configures `2_skills/` as a native OpenCode skill source and permits loading the PDF and LaTeX visuals skills; verify discovery in your installation. |
 | [search_strings.txt](1_workspace/search_strings.txt) | Exact executable title/abstract search strings, dates, semantic query, and cutoff. |
 | `1_workspace/search_runs/` | Immutable per-run text snapshots of exact queries and collection outcomes. |
 | `1_workspace/semantic_ranking.csv` | Full metadata ranking and PASS/BELOW_THRESHOLD/MISSING_ABSTRACT/PENDING/OUTSIDE_SEARCH states. |
@@ -266,6 +304,7 @@ Empty corpus directories are created by `init` and may not appear immediately af
 | [04_synthesis_and_bibtex.md](2_skills/04_synthesis_and_bibtex.md) | Traceable synthesis, reporting, citations, and PRISMA interpretation. |
 | [05_reasoning_calibration.md](2_skills/05_reasoning_calibration.md) | Permanent corrections and reassessment of affected papers. |
 | [pdf-to-markdown/SKILL.md](2_skills/pdf-to-markdown/SKILL.md) | Optional local document-conversion skill, separate from the five review stages. |
+| [latex-visuals/SKILL.md](2_skills/latex-visuals/SKILL.md) | Create editable LaTeX diagrams and plots with TikZ and PGFPlots. |
 | [engine.py](2_skills/engine.py) | Unified deterministic CLI described below. |
 | [SLRBlueprint.tex](1_workspace/SLRBlueprint.tex) | LaTeX manuscript structure; keep search-process limitations in methodology and distinguish them from primary-literature limitations. |
 | [check_opencode_skills.py](1_workspace/validation/check_opencode_skills.py) | Waits for native PDF skill registration without invoking a model. |
@@ -289,7 +328,7 @@ flowchart TD
     F --> G[Record full-text eligibility]
     G --> H[Extract page-grounded evidence]
     H --> I[Write synthesis and generate PRISMA]
-    I --> J[Checkpoint and push when desired]
+    I --> J[Checkpoint locally]
     J --> K[Run a living-review update]
     K --> C
 ```
